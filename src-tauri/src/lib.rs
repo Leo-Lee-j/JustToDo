@@ -11,6 +11,15 @@ use std::sync::{Mutex, OnceLock};
 
 static NOTIFICATION_CHECK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+/// The Windows toast backend accepts named system sounds (rather than file
+/// paths); other desktop backends accept a sound-theme name.
+pub(crate) fn notification_sound() -> &'static str {
+    #[cfg(target_os = "windows")]
+    { "IM" }
+    #[cfg(not(target_os = "windows"))]
+    { "message-new-instant" }
+}
+
 fn due_within_window(end: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>, hours: i32) -> bool {
     end - now <= chrono::Duration::hours(hours.clamp(0, 168) as i64)
 }
@@ -42,11 +51,13 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
         format!("{} · {}", title, remaining)
     }).collect();
     if due.len() > 5 { lines.push(format!("还有 {} 个任务", due.len() - 5)); }
-    app.notification().builder()
+    let mut builder = app.notification().builder()
         .title("任务提醒")
-        .body(lines.join("\n"))
-        .show()
-        .map_err(|e| e.to_string())?;
+        .body(lines.join("\n"));
+    if config.notification.sound_enabled {
+        builder = builder.sound(notification_sound());
+    }
+    builder.show().map_err(|e| e.to_string())?;
 
     let notified_at = models::now_utc();
     let count = due.len();

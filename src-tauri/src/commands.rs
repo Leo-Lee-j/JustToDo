@@ -51,16 +51,18 @@ pub fn set_config(store: State<'_, Store>, config: Config) {
 }
 
 #[tauri::command]
-pub fn send_test_notification(app: AppHandle) -> Result<(), String> {
+pub fn send_test_notification(app: AppHandle, store: State<'_, Store>) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     // Keep this command independent from task state so it can also diagnose
     // Windows notification permission from the settings window.
-    app.notification()
+    let mut builder = app.notification()
         .builder()
         .title("JustToDo")
-        .body("任务提醒测试")
-        .show()
-        .map_err(|e| e.to_string())
+        .body("任务提醒测试");
+    if store.config().notification.sound_enabled {
+        builder = builder.sound(crate::notification_sound());
+    }
+    builder.show().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
