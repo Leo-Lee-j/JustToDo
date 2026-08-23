@@ -4,7 +4,7 @@
 // - 每日备份 + 删除前备份
 // - 单实例文件锁
 
-use crate::models::{AppData, Config};
+use crate::models::{AppData, Config, APP_VERSION};
 use parking_lot::Mutex;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,7 +34,12 @@ impl Store {
             }
             write_json(&dir.join("data.json"), &data).ok();
         }
-        let config = load_or_default(&dir.join("config.json"), Config::default());
+        let config_path = dir.join("config.json");
+        let mut config = load_or_default(&config_path, Config::default());
+        if config.version != APP_VERSION {
+            config.version = APP_VERSION.into();
+            write_json(&config_path, &config).ok();
+        }
 
         Store {
             data: Mutex::new(data),

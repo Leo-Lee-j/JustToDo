@@ -1,18 +1,21 @@
-<script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
+﻿<script setup lang="ts">
+import { onMounted, onBeforeUnmount, ref, computed } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable as enableAutostart, disable as disableAutostart } from "@tauri-apps/plugin-autostart";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import ChevronDown16 from "@carbon/icons-vue/lib/chevron--down/16.js";
 import Close16 from "@carbon/icons-vue/lib/close/16.js";
 import { useConfigStore } from "@/stores/configStore";
+import type { ShortcutConfig } from "@/types";
 
 const configStore = useConfigStore();
+const windowApi = getCurrentWindow();
 const emit = defineEmits<{ close: [] }>();
-const currentVersion = ref("0.0.1");
+const currentVersion = ref("0.0.2");
 const availableVersion = ref("");
 const updateNotes = ref("");
 const updateProgress = ref(0);
@@ -22,6 +25,7 @@ const notificationPermission = ref<"granted" | "denied" | "unknown">("unknown");
 const systemFonts = ref<string[]>([]);
 const fontSearch = ref("");
 const fontPickerOpen = ref(false);
+const recordingShortcut = ref<keyof ShortcutConfig | null>(null);
 const filteredFonts = computed(() => {
   const query = fontSearch.value.trim().toLowerCase();
   return query ? systemFonts.value.filter((font) => font.toLowerCase().includes(query)) : systemFonts.value;
@@ -61,12 +65,13 @@ async function syncTaskbar(patch: Partial<typeof configStore.config.taskbar>) {
   await invoke("sync_taskbar");
 }
 async function refreshNotificationPermission() {
-  notificationPermission.value = (await isPermissionGranted().catch(() => false)) ? "granted" : "denied";
+  try { notificationPermission.value = (await isPermissionGranted()) ? "granted" : "unknown"; }
+  catch { notificationPermission.value = "unknown"; }
 }
 async function testNotification() {
   let granted = await isPermissionGranted().catch(() => false);
   if (!granted) granted = (await requestPermission().catch(() => "denied")) === "granted";
-  notificationPermission.value = granted ? "granted" : "denied";
+  notificationPermission.value = granted ? "granted" : "unknown";
   if (granted) await invoke("send_test_notification").catch(() => undefined);
 }
 async function checkForUpdates() {
@@ -83,16 +88,53 @@ async function checkForUpdates() {
       else if (event.event === "Finished") { updateProgress.value = 100; updateStatus.value = "下载完成，正在重启安装..."; }
     });
     await relaunch();
-  } catch { updateStatus.value = "检查更新失败，请稍后重试"; }
+  } catch (error) {
+    // The updater error is otherwise hidden behind a generic message. In
+    // particular, a 404 means no signed latest.json has been published yet.
+    const detail = String(error ?? "");
+    console.error("update check failed", error);
+    if (/404|not found|未找到/i.test(detail)) {
+      updateStatus.value = "更新源暂不可用（尚未发布更新）";
+    } else if (/fetch|network|connect|网络/i.test(detail)) {
+      updateStatus.value = "无法连接更新服务，请检查网络";
+    } else {
+      updateStatus.value = "检查更新失败，请稍后重试";
+    }
+  }
   finally { updateBusy.value = false; }
 }
 function close() { emit("close"); }
-onMounted(async () => { await configStore.load(); currentVersion.value = await getVersion().catch(() => "0.0.1"); await loadSystemFonts(); await refreshNotificationPermission(); });
+async function dragSettings(event: PointerEvent) {
+  if ((event.target as HTMLElement).closest("button")) return;
+  await windowApi.startDragging();
+}
+async function captureShortcut(field: keyof ShortcutConfig, event: KeyboardEvent) {
+  event.preventDefault();
+  if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
+  const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
+  const parts = [event.ctrlKey ? "Ctrl" : "", event.metaKey ? "Meta" : "", event.altKey ? "Alt" : "", event.shiftKey ? "Shift" : "", key].filter(Boolean);
+  await configStore.update({ general: { ...configStore.config.general, shortcuts: { ...configStore.config.general.shortcuts, [field]: parts.join("+") } } });
+  recordingShortcut.value = null;
+}
+async function beginShortcutRecording(field: keyof ShortcutConfig) {
+  recordingShortcut.value = field;
+}
+async function onShortcutKeydown(event: KeyboardEvent) {
+  const field = recordingShortcut.value;
+  if (!field) return;
+  if (event.key === "Escape") { event.preventDefault(); recordingShortcut.value = null; return; }
+  await captureShortcut(field, event);
+}
+onMounted(async () => {
+  await configStore.load(); currentVersion.value = await getVersion().catch(() => "0.0.2"); await loadSystemFonts(); await refreshNotificationPermission();
+  window.addEventListener("keydown", onShortcutKeydown, true);
+});
+onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, true));
 </script>
 
 <template>
   <main class="settings-window" :style="{ fontFamily: configStore.config.general.fontFamily }">
-    <header class="settings-header"><strong>设置</strong><button class="close-btn" title="关闭" aria-label="关闭" @click="close"><Close16 /></button></header>
+    <header class="settings-header" @pointerdown="dragSettings"><strong>设置</strong><button class="close-btn" title="关闭" aria-label="关闭" @click="close"><Close16 /></button></header>
     <section class="settings-body">
       <label class="settings-label">字体</label>
       <div class="font-picker" :class="{ open: fontPickerOpen }">
@@ -102,6 +144,15 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
       <label class="settings-label">背景透明度 {{ configStore.config.window.opacity }}%</label>
       <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @input="setOpacity(Number(($event.target as HTMLInputElement).value))" />
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.general.launchOnStartup" @change="setLaunchOnStartup(($event.target as HTMLInputElement).checked)" /> 开机自启动</label>
+      <label class="settings-label">快捷键</label>
+      <div class="shortcut-list">
+        <div v-for="item in ([['newTask', '新建任务'], ['newTab', '新建 Tab'], ['search', '搜索'], ['showWindow', '打开主界面']] as const)" :key="item[0]" class="shortcut-row">
+          <span>{{ item[1] }}</span>
+          <button class="shortcut-input" @click="beginShortcutRecording(item[0])">
+            {{ recordingShortcut === item[0] ? '请按键...' : (configStore.config.general.shortcuts[item[0]] || '未绑定') }}
+          </button>
+        </div>
+      </div>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.taskbar.enabled" @change="syncTaskbar({ enabled: ($event.target as HTMLInputElement).checked })" /> 显示任务栏要务</label>
       <template v-if="configStore.config.taskbar.enabled">
         <label class="settings-label">任务栏位置</label>
@@ -126,13 +177,19 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
 </template>
 
 <style scoped>
-.settings-window { position:absolute; z-index:20; inset:0; min-height:100%; box-sizing:border-box; color:var(--text); background:var(--bg); border:1px solid var(--border); }
-.settings-header { height:38px; display:flex; align-items:center; justify-content:space-between; padding:0 12px; background:var(--bg-soft); border-bottom:1px solid var(--border); }
+.settings-window { position:absolute; z-index:20; inset:0; height:100%; min-height:0; display:flex; flex-direction:column; box-sizing:border-box; color:var(--text); background:var(--bg); border:1px solid var(--border); overflow:hidden; }
+.settings-header { flex:0 0 36px; height:36px; display:flex; align-items:center; justify-content:space-between; padding:0 12px; background:var(--bg-soft); border-bottom:1px solid var(--border); cursor:grab; }
+.settings-header:active { cursor:grabbing; }
 .settings-header strong { font-size:13px; }
 .close-btn { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-soft); border-radius:4px; }
 .close-btn:hover { background:rgba(0,0,0,.06); color:var(--text); }
 .close-btn :deep(svg) { width:16px; height:16px; }
-.settings-body { padding:12px; font-size:11px; }
+.settings-body { flex:1 1 auto; min-height:0; padding:12px; font-size:11px; overflow-y:auto; scrollbar-width:none; }
+.settings-body::-webkit-scrollbar { display:none; }
+.shortcut-list { display:grid; gap:5px; }
+.shortcut-row { display:grid; grid-template-columns:1fr 130px; gap:6px; align-items:center; }
+.shortcut-input { min-width:0; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; text-align:center; }
+.shortcut-input:focus { border-color:var(--accent); outline:none; }
 .settings-label { display:block; margin:8px 0 4px; color:var(--text-soft); }
 .settings-body input[type=range] { display:block; width:100%; }
 .hours-input { width:72px; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }

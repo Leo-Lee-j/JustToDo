@@ -94,6 +94,14 @@ export interface GeneralConfig {
   launchOnStartup: boolean;
   singleInstance: boolean;
   fontFamily: string;
+  shortcuts: ShortcutConfig;
+}
+
+export interface ShortcutConfig {
+  newTask: string;
+  newTab: string;
+  search: string;
+  showWindow: string;
 }
 
 export interface Config {

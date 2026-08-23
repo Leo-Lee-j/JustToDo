@@ -28,6 +28,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend dependencies
         run: npm ci
+      - name: Verify frontend
+        run: npm run build
+      - name: Verify backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:

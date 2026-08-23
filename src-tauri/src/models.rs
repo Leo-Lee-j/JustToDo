@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
@@ -137,6 +139,32 @@ pub struct GeneralConfig {
     pub launch_on_startup: bool,
     pub single_instance: bool,
     pub font_family: String,
+    #[serde(default)]
+    pub shortcuts: ShortcutConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutConfig {
+    #[serde(default = "default_new_task_shortcut")]
+    pub new_task: String,
+    #[serde(default = "default_new_tab_shortcut")]
+    pub new_tab: String,
+    #[serde(default = "default_search_shortcut")]
+    pub search: String,
+    #[serde(default = "default_show_window_shortcut")]
+    pub show_window: String,
+}
+
+fn default_new_task_shortcut() -> String { "Ctrl+N".into() }
+fn default_new_tab_shortcut() -> String { "Ctrl+Shift+T".into() }
+fn default_search_shortcut() -> String { "Ctrl+F".into() }
+fn default_show_window_shortcut() -> String { "Ctrl+Shift+Space".into() }
+
+impl Default for ShortcutConfig {
+    fn default() -> Self {
+        Self { new_task: default_new_task_shortcut(), new_tab: default_new_tab_shortcut(), search: default_search_shortcut(), show_window: default_show_window_shortcut() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,9 +224,10 @@ impl Default for Config {
                 launch_on_startup: false,
                 single_instance: true,
                 font_family: "Microsoft YaHei".into(),
+                shortcuts: ShortcutConfig::default(),
             },
             theme: "light".into(),
-            version: "1.0.0".into(),
+            version: APP_VERSION.into(),
         }
     }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, nextTick, watch } from "vue";
 import draggable from "vuedraggable";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -15,6 +15,7 @@ import TrashCan16 from "@carbon/icons-vue/lib/trash-can/16.js";
 import TextAlignLeft16 from "@carbon/icons-vue/lib/text--align--left/16.js";
 import Settings16 from "@carbon/icons-vue/lib/settings/16.js";
 import ChevronDown16 from "@carbon/icons-vue/lib/chevron--down/16.js";
+import Subtract16 from "@carbon/icons-vue/lib/subtract/16.js";
 import { enable as enableAutostart, disable as disableAutostart } from "@tauri-apps/plugin-autostart";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -25,6 +26,7 @@ import { useConfigStore } from "@/stores/configStore";
 import type { Task } from "@/types";
 import TaskItem from "./TaskItem.vue";
 import SettingsWindow from "./SettingsWindow.vue";
+import { installWindowShortcuts } from "@/utils/shortcuts";
 
 const taskStore = useTaskStore();
 const tabStore = useTabStore();
@@ -45,7 +47,7 @@ const creatingTab = ref(false);
 const confirmDeleteTabId = ref<string | null>(null);
 const showHistory = ref(false);
 const updateStatus = ref("");
-const currentVersion = ref("0.0.1");
+const currentVersion = ref("0.0.2");
 const availableVersion = ref("");
 const updateNotes = ref("");
 const updateProgress = ref(0);
@@ -63,6 +65,8 @@ const filteredFonts = computed(() => {
 const windowApi = getCurrentWindow();
 let unlistenMoved: (() => void) | undefined;
 let unlistenNotification: (() => void) | undefined;
+let uninstallShortcuts: (() => void) | undefined;
+let stopShortcutWatch: (() => void) | undefined;
 let snapTimer: ReturnType<typeof setTimeout> | undefined;
 let snapping = false;
 let notificationBatchRemaining = 0;
@@ -307,24 +311,38 @@ async function snapToEdge(movedPosition?: { x: number; y: number }) {
     movedPosition ? Promise.resolve(movedPosition) : windowApi.outerPosition(),
     windowApi.outerSize(),
   ]);
-  const left = monitor.position.x;
-  const top = monitor.position.y;
-  const right = left + monitor.size.width - size.width;
-  const bottom = top + monitor.size.height - size.height;
+  // Use the monitor work area so the window does not end up behind the
+  // Windows taskbar or outside the visible desktop.
+  const area = monitor.workArea;
+  const left = area.position.x;
+  const top = area.position.y;
+  const right = left + area.size.width - size.width;
+  const bottom = top + area.size.height - size.height;
   const snapLeft = left + EDGE_MARGIN.left;
   const snapTop = top + EDGE_MARGIN.top;
   const snapRight = right - EDGE_MARGIN.right;
   const snapBottom = bottom - EDGE_MARGIN.bottom;
-  const x = Math.abs(position.x - left) <= SNAP_THRESHOLD || Math.abs(position.x - snapLeft) <= SNAP_THRESHOLD
-    ? snapLeft
-    : Math.abs(position.x - right) <= SNAP_THRESHOLD || Math.abs(position.x - snapRight) <= SNAP_THRESHOLD
-      ? snapRight
-      : position.x;
-  const y = Math.abs(position.y - top) <= SNAP_THRESHOLD || Math.abs(position.y - snapTop) <= SNAP_THRESHOLD
-    ? snapTop
-    : Math.abs(position.y - bottom) <= SNAP_THRESHOLD || Math.abs(position.y - snapBottom) <= SNAP_THRESHOLD
-      ? snapBottom
-      : position.y;
+  const distances = [
+    { edge: "left", distance: Math.abs(position.x - snapLeft) },
+    { edge: "right", distance: Math.abs(position.x - snapRight) },
+    { edge: "top", distance: Math.abs(position.y - snapTop) },
+    { edge: "bottom", distance: Math.abs(position.y - snapBottom) },
+  ];
+  const nearest = distances.reduce((a, b) => (a.distance <= b.distance ? a : b));
+  const outside = position.x < left || position.x > right || position.y < top || position.y > bottom;
+  let x = position.x;
+  let y = position.y;
+  if (outside || nearest.distance <= SNAP_THRESHOLD) {
+    if (nearest.edge === "left" || position.x < left) x = snapLeft;
+    if (nearest.edge === "right" || position.x > right) x = snapRight;
+    if (nearest.edge === "top" || position.y < top) y = snapTop;
+    if (nearest.edge === "bottom" || position.y > bottom) y = snapBottom;
+  }
+  // A window dragged past a corner is restored fully into the work area.
+  if (outside) {
+    x = Math.max(snapLeft, Math.min(snapRight, x));
+    y = Math.max(snapTop, Math.min(snapBottom, y));
+  }
   if (x === position.x && y === position.y) return;
   snapping = true;
   try {
@@ -335,11 +353,24 @@ async function snapToEdge(movedPosition?: { x: number; y: number }) {
 }
 
 onMounted(async () => {
-  currentVersion.value = await getVersion().catch(() => "0.0.1");
+  currentVersion.value = await getVersion().catch(() => "0.0.2");
   document.addEventListener("pointerdown", closeComposerNotesOnOutside);
   await configStore.load();
   await invoke("sync_taskbar");
   await loadData();
+  const installShortcuts = () => {
+    uninstallShortcuts?.();
+    uninstallShortcuts = installWindowShortcuts({
+      newTask: () => document.querySelector<HTMLInputElement>(".composer-main input")?.focus(),
+      newTab: () => { showNewTab.value = true; },
+      switchTab: (index) => {
+        const tab = tabs.value[index - 1];
+        if (tab) void switchTab(tab.id);
+      },
+    }, configStore.config.general.shortcuts);
+  };
+  installShortcuts();
+  stopShortcutWatch = watch(() => configStore.config.general.shortcuts, installShortcuts, { deep: true });
   unlistenNotification = await listen("notification:sent", () => void taskStore.load());
   unlistenMoved = await windowApi.onMoved(({ payload }) => {
     if (snapTimer) clearTimeout(snapTimer);
@@ -352,6 +383,8 @@ onBeforeUnmount(() => {
   if (snapTimer) clearTimeout(snapTimer);
   unlistenMoved?.();
   unlistenNotification?.();
+  uninstallShortcuts?.();
+  stopShortcutWatch?.();
 });
 
 function closeComposerNotesOnOutside(event: PointerEvent) {
@@ -382,7 +415,7 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
           {{ configStore.config.window.alwaysOnTop ? "📌" : "📍" }}
         </button>
         <button class="settings-btn" @click="toggleSettings" title="设置" aria-label="设置"><Settings16 /></button>
-        <button class="icon-btn" @click="invoke('hide_window', { label: 'sticky' })" title="最小化">—</button>
+        <button class="minimize-btn" @click="invoke('hide_window', { label: 'sticky' })" title="最小化" aria-label="最小化"><Subtract16 /></button>
       </div>
     </header>
     <SettingsWindow v-if="showSettings" @close="showSettings = false" />
@@ -542,6 +575,9 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
 .settings-btn { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-soft); border-radius: 4px; }
 .settings-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--text); }
 .settings-btn :deep(svg) { width: 16px; height: 16px; }
+.minimize-btn { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-soft); border-radius: 4px; }
+.minimize-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--text); }
+.minimize-btn :deep(svg) { width: 16px; height: 16px; }
 .actions > .pin-btn:nth-child(2) { display: none; }
 .history-toggle { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-soft); border-radius:4px; }
 .history-toggle:hover { background:rgba(0,0,0,.06); color:var(--text); }

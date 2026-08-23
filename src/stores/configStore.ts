@@ -29,9 +29,10 @@ const DEFAULT_CONFIG: Config = {
     launchOnStartup: false,
     singleInstance: true,
     fontFamily: "Microsoft YaHei",
+    shortcuts: { newTask: "Ctrl+N", newTab: "Ctrl+Shift+T", search: "Ctrl+F", showWindow: "Ctrl+Shift+Space" },
   },
   theme: "light",
-  version: "0.0.1",
+  version: "0.0.2",
 };
 
 function legacyReminderHours(value: string | undefined): number {
@@ -56,7 +57,7 @@ export const useConfigStore = defineStore("config", {
         this.config = {
           ...DEFAULT_CONFIG,
           ...cfg,
-          general: { ...DEFAULT_CONFIG.general, ...cfg.general },
+          general: { ...DEFAULT_CONFIG.general, ...cfg.general, shortcuts: { ...DEFAULT_CONFIG.general.shortcuts, ...(cfg.general?.shortcuts ?? {}) } },
           taskbar: { ...DEFAULT_CONFIG.taskbar, ...cfg.taskbar },
           notification: {
             ...DEFAULT_CONFIG.notification,
