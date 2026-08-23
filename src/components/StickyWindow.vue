@@ -3,7 +3,6 @@ import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import draggable from "vuedraggable";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, currentMonitor, PhysicalPosition } from "@tauri-apps/api/window";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getVersion } from "@tauri-apps/api/app";
 import pin16 from "@carbon/icons/es/pin/16.js";
 import pinFilled16 from "@carbon/icons/es/pin--filled/16.js";
@@ -22,6 +21,7 @@ import { useTaskStore } from "@/stores/taskStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useConfigStore } from "@/stores/configStore";
 import TaskItem from "./TaskItem.vue";
+import SettingsWindow from "./SettingsWindow.vue";
 
 const taskStore = useTaskStore();
 const tabStore = useTabStore();
@@ -217,10 +217,7 @@ async function checkForUpdates() {
 }
 
 async function toggleSettings() {
-  const existing = await WebviewWindow.getByLabel("settings");
-  if (existing) { await existing.show(); await existing.setFocus(); return; }
-  const settings = new WebviewWindow("settings", { url: "index.html#/settings", title: "JustToDo Settings", width: 320, height: 430, minWidth: 320, minHeight: 430, resizable: false, decorations: false, center: true });
-  await settings.once("tauri://error", (event) => console.error("settings window error", event));
+  showSettings.value = true;
 }
 
 async function onReorder() {
@@ -317,6 +314,7 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
         <button class="icon-btn" @click="invoke('hide_window', { label: 'sticky' })" title="最小化">—</button>
       </div>
     </header>
+    <SettingsWindow v-if="showSettings" @close="showSettings = false" />
     <section v-if="showHistory" class="history-panel">
       <div v-if="!taskStore.history.length" class="history-empty">暂无任务记录</div>
       <div v-for="entry in taskStore.history" :key="entry.id" class="history-item">
@@ -329,7 +327,7 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
     </section>
 
     <!-- 设置浮层 -->
-    <div v-if="showSettings" class="settings-pop">
+    <div v-if="false" class="settings-pop">
       <div class="settings-title">设置</div>
       <label class="settings-label">字体</label>
       <div class="font-picker" :class="{ open: fontPickerOpen }">

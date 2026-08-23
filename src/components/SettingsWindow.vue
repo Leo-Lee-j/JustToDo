@@ -5,12 +5,12 @@ import { enable as enableAutostart, disable as disableAutostart } from "@tauri-a
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import ChevronDown16 from "@carbon/icons-vue/lib/chevron--down/16.js";
 import Close16 from "@carbon/icons-vue/lib/close/16.js";
 import { useConfigStore } from "@/stores/configStore";
 
 const configStore = useConfigStore();
+const emit = defineEmits<{ close: [] }>();
 const currentVersion = ref("0.0.1");
 const availableVersion = ref("");
 const updateNotes = ref("");
@@ -60,7 +60,7 @@ async function checkForUpdates() {
   } catch { updateStatus.value = "检查更新失败，请稍后重试"; }
   finally { updateBusy.value = false; }
 }
-async function close() { await getCurrentWindow().close(); }
+function close() { emit("close"); }
 onMounted(async () => { await configStore.load(); currentVersion.value = await getVersion().catch(() => "0.0.1"); await loadSystemFonts(); });
 </script>
 
@@ -86,7 +86,7 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
 </template>
 
 <style scoped>
-.settings-window { min-height:100vh; box-sizing:border-box; color:var(--text); background:var(--bg); border:1px solid var(--border); }
+.settings-window { position:absolute; z-index:20; inset:0; min-height:100%; box-sizing:border-box; color:var(--text); background:var(--bg); border:1px solid var(--border); }
 .settings-header { height:38px; display:flex; align-items:center; justify-content:space-between; padding:0 12px; background:var(--bg-soft); border-bottom:1px solid var(--border); }
 .settings-header strong { font-size:13px; }
 .close-btn { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-soft); border-radius:4px; }
