@@ -395,8 +395,9 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
         item-key="id"
         handle=".drag-handle"
         :animation="150"
+        :class="{ dragging: drag }"
         @start="drag = true"
-        @end="onReorder"
+        @end="drag = false; onReorder()"
       >
         <template #item="{ element }">
           <TaskItem :task="element" />
@@ -634,6 +635,8 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
   padding: 4px 0;
   scrollbar-width: none;
 }
+.list :deep(.task) { cursor: grab; }
+.list.dragging, .list.dragging :deep(.task) { cursor: grabbing !important; }
 .list::-webkit-scrollbar { display: none; }
 .empty {
   text-align: center;
