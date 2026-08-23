@@ -101,5 +101,5 @@ jobs:
             $response = Invoke-WebRequest -Uri $assetUrl -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } -UseBasicParsing -TimeoutSec 30
             if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
           } catch {
-            throw "latest.json was not published at $assetUrl: $($_.Exception.Message)"
+            throw "latest.json was not published at ${assetUrl}: $($_.Exception.Message)"
           }
