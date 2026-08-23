@@ -23,6 +23,10 @@ yarn-error.log*
 pnpm-debug.log*
 coverage/
 
+# Tauri signing keys
+*.key
+*.key.pub
+
 # Editor and IDE files
 .idea/
 .vscode/
