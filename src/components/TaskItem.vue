@@ -21,6 +21,7 @@ const pointerStartX = ref(0);
 const pointerStartY = ref(0);
 const pointerId = ref<number | null>(null);
 const suppressClick = ref(false);
+const pointerMoved = ref(false);
 const revealed = ref(false);
 const deleteWidth = 56;
 const updatedLabel = computed(() => {
@@ -53,12 +54,14 @@ function onPointerDown(event: PointerEvent) {
   pointerStartX.value = event.clientX;
   pointerStartY.value = event.clientY;
   swiping.value = false;
+  pointerMoved.value = false;
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 }
 function onPointerMove(event: PointerEvent) {
   if (pointerId.value !== event.pointerId) return;
   const dx = event.clientX - pointerStartX.value;
   const dy = event.clientY - pointerStartY.value;
+  if (Math.hypot(dx, dy) > 6) pointerMoved.value = true;
   if (!swiping.value && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 6) return;
   if (dx <= 0 && !swiping.value) return;
   if (Math.abs(dx) > 6) {
@@ -71,13 +74,14 @@ async function onPointerUp(event: PointerEvent) {
   if (pointerId.value !== event.pointerId) return;
   pointerId.value = null;
   const shouldReveal = swiping.value && swipeX.value >= deleteWidth * 0.4;
-  if (swiping.value) {
+  if (swiping.value || pointerMoved.value) {
     suppressClick.value = true;
     window.setTimeout(() => { suppressClick.value = false; }, 220);
   }
   revealed.value = shouldReveal;
   swipeX.value = shouldReveal ? deleteWidth : 0;
   swiping.value = false;
+  pointerMoved.value = false;
 }
 function onTaskClick() {
   if (suppressClick.value || swipeX.value !== 0) return;
