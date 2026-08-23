@@ -12,6 +12,7 @@ fn record_history(store: &Store, task: &Task, operation: &str, deleted: bool) {
         operation: operation.into(),
         timestamp: now_utc(),
         deleted,
+        status: task.status.clone(),
     };
     store.with_data_mut(|d| {
         d.history.push(entry);

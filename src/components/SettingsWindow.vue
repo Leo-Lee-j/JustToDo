@@ -27,7 +27,7 @@ const filteredFonts = computed(() => {
 
 async function loadSystemFonts() {
   try { systemFonts.value = await invoke<string[]>("list_system_fonts"); }
-  catch { systemFonts.value = ["Arial", "Segoe UI", "sans-serif", "serif", "monospace"]; }
+  catch { systemFonts.value = ["Microsoft YaHei", "Arial", "Segoe UI", "sans-serif", "serif", "monospace"]; }
 }
 async function setFontFamily(value: string) {
   await configStore.update({ general: { ...configStore.config.general, fontFamily: value } });

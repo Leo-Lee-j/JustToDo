@@ -60,7 +60,11 @@ pub struct TaskHistoryEntry {
     pub operation: String,
     pub timestamp: String,
     pub deleted: bool,
+    #[serde(default = "default_history_status")]
+    pub status: TaskStatus,
 }
+
+fn default_history_status() -> TaskStatus { TaskStatus::Todo }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -177,7 +181,7 @@ impl Default for Config {
             general: GeneralConfig {
                 launch_on_startup: false,
                 single_instance: true,
-                font_family: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif".into(),
+                font_family: "Microsoft YaHei".into(),
             },
             theme: "light".into(),
             version: "1.0.0".into(),

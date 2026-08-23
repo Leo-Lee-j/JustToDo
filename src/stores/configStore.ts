@@ -27,7 +27,7 @@ const DEFAULT_CONFIG: Config = {
   general: {
     launchOnStartup: false,
     singleInstance: true,
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    fontFamily: "Microsoft YaHei",
   },
   theme: "light",
   version: "0.0.1",
@@ -48,6 +48,9 @@ export const useConfigStore = defineStore("config", {
           general: { ...DEFAULT_CONFIG.general, ...cfg.general },
           taskbar: { ...DEFAULT_CONFIG.taskbar, ...cfg.taskbar, enabled: false },
         };
+        if (!cfg.general?.fontFamily || cfg.general.fontFamily === "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif") {
+          this.config.general.fontFamily = DEFAULT_CONFIG.general.fontFamily;
+        }
       } catch {
         this.config = DEFAULT_CONFIG;
       }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import draggable from "vuedraggable";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, currentMonitor, PhysicalPosition } from "@tauri-apps/api/window";
@@ -45,6 +45,7 @@ const availableVersion = ref("");
 const updateNotes = ref("");
 const updateProgress = ref(0);
 const updateBusy = ref(false);
+const taskListEl = ref<HTMLElement | null>(null);
 const systemFonts = ref<string[]>([]);
 const fontSearch = ref("");
 const fontPickerOpen = ref(false);
@@ -95,6 +96,8 @@ async function addTask() {
     newNotes.value = "";
     newPriority.value = 2;
     showComposerNotes.value = false;
+    await nextTick();
+    taskListEl.value?.querySelector<HTMLElement>(`[data-task-id="${task.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } finally {
     creatingTask.value = false;
   }
@@ -165,7 +168,7 @@ async function loadSystemFonts() {
   try {
     systemFonts.value = await invoke<string[]>("list_system_fonts");
   } catch {
-    systemFonts.value = ["Arial", "Segoe UI", "sans-serif", "serif", "monospace"];
+    systemFonts.value = ["Microsoft YaHei", "Arial", "Segoe UI", "sans-serif", "serif", "monospace"];
   }
 }
 
@@ -286,8 +289,10 @@ onBeforeUnmount(() => {
 });
 
 function closeComposerNotesOnOutside(event: PointerEvent) {
-  if (!(event.target as HTMLElement)?.closest(".input-bar")) showComposerNotes.value = false;
-  if (!(event.target as HTMLElement)?.closest(".settings-pop, .settings-btn")) {
+  const target = event.target as HTMLElement;
+  if (target.closest(".settings-window")) return;
+  if (!target.closest(".input-bar")) showComposerNotes.value = false;
+  if (!target.closest(".settings-pop, .settings-btn")) {
     showSettings.value = false;
     fontPickerOpen.value = false;
   }
@@ -317,9 +322,9 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
     <SettingsWindow v-if="showSettings" @close="showSettings = false" />
     <section v-if="showHistory" class="history-panel">
       <div v-if="!taskStore.history.length" class="history-empty">暂无任务记录</div>
-      <div v-for="entry in taskStore.history" :key="entry.id" class="history-item">
+      <div v-for="entry in taskStore.history" :key="entry.id" class="history-item" :class="{ 'history-done': entry.status === 'done' && !entry.deleted, 'history-deleted': entry.deleted }">
         <span class="history-content">
-          <span class="history-title">{{ entry.title }}</span>
+          <span class="history-title"><span v-if="entry.deleted" class="history-emoji" aria-hidden="true">😞</span><span v-else-if="entry.status === 'done'" class="history-emoji" aria-hidden="true">🎉</span>{{ entry.title }}</span>
           <span class="history-time">{{ formatHistoryTime(entry.timestamp) }}</span>
         </span>
         <button v-if="entry.deleted" class="history-restore" title="恢复任务" aria-label="恢复任务" @click="restoreFromHistory(entry.taskId)"><Undo16 /></button>
@@ -390,7 +395,7 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
     </nav>
 
     <!-- 任务列表 -->
-    <div v-if="!showHistory" class="list">
+    <div v-if="!showHistory" ref="taskListEl" class="list">
       <draggable
         v-model="taskStore.activeTasks"
         item-key="id"
@@ -544,8 +549,11 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
 .update-progress span { display: block; height: 100%; background: var(--accent); transition: width .2s ease; }
 .history-panel { flex: 1; min-height: 0; overflow-y: auto; background: var(--bg); }
 .history-item { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.history-item.history-done { background: linear-gradient(90deg, #d7f0dc 0%, #f3fbf4 100%); }
+.history-item.history-deleted { background: linear-gradient(90deg, #f8d7da 0%, #fff5f5 100%); }
 .history-content { flex: 1; min-width: 0; }
 .history-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.history-emoji { display: inline-block; margin-right: 4px; }
 .history-time { display: block; margin-top: 2px; color: var(--text-soft); font-size: 10px; line-height: 1.2; }
 .history-restore { display: inline-flex; color: var(--primary); padding: 2px; }
 .history-restore :deep(svg) { width: 14px; height: 14px; }

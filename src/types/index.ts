@@ -42,6 +42,7 @@ export interface TaskHistoryEntry {
   operation: string;
   timestamp: string;
   deleted: boolean;
+  status: TaskStatus;
 }
 
 export interface Tab {
