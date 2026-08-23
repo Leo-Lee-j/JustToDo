@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import draggable from "vuedraggable";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, currentMonitor, PhysicalPosition } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getVersion } from "@tauri-apps/api/app";
 import pin16 from "@carbon/icons/es/pin/16.js";
 import pinFilled16 from "@carbon/icons/es/pin--filled/16.js";
@@ -215,9 +216,11 @@ async function checkForUpdates() {
   }
 }
 
-function toggleSettings() {
-  showSettings.value = !showSettings.value;
-  if (showSettings.value && !systemFonts.value.length) void loadSystemFonts();
+async function toggleSettings() {
+  const existing = await WebviewWindow.getByLabel("settings");
+  if (existing) { await existing.show(); await existing.setFocus(); return; }
+  const settings = new WebviewWindow("settings", { url: "index.html#/settings", title: "JustToDo Settings", width: 320, height: 430, minWidth: 320, minHeight: 430, resizable: false, decorations: false, center: true });
+  await settings.once("tauri://error", (event) => console.error("settings window error", event));
 }
 
 async function onReorder() {
