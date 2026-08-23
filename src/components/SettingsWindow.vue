@@ -56,6 +56,10 @@ async function setReminderHours(value: number) {
 async function setSoundEnabled(enabled: boolean) {
   await configStore.update({ notification: { ...configStore.config.notification, soundEnabled: enabled } });
 }
+async function syncTaskbar(patch: Partial<typeof configStore.config.taskbar>) {
+  await configStore.update({ taskbar: { ...configStore.config.taskbar, ...patch } });
+  await invoke("sync_taskbar");
+}
 async function refreshNotificationPermission() {
   notificationPermission.value = (await isPermissionGranted().catch(() => false)) ? "granted" : "denied";
 }
@@ -98,6 +102,15 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
       <label class="settings-label">背景透明度 {{ configStore.config.window.opacity }}%</label>
       <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @input="setOpacity(Number(($event.target as HTMLInputElement).value))" />
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.general.launchOnStartup" @change="setLaunchOnStartup(($event.target as HTMLInputElement).checked)" /> 开机自启动</label>
+      <label class="settings-check"><input type="checkbox" :checked="configStore.config.taskbar.enabled" @change="syncTaskbar({ enabled: ($event.target as HTMLInputElement).checked })" /> 显示任务栏要务</label>
+      <template v-if="configStore.config.taskbar.enabled">
+        <label class="settings-label">任务栏位置</label>
+        <select class="taskbar-select" :value="configStore.config.taskbar.position" @change="syncTaskbar({ position: ($event.target as HTMLSelectElement).value as 'left' | 'center' | 'right' })">
+          <option value="left">左侧</option><option value="center">居中</option><option value="right">右侧</option>
+        </select>
+        <label class="settings-label">显示任务数</label>
+        <input class="hours-input" type="number" min="1" max="3" step="1" :value="configStore.config.taskbar.visibleCount" @change="syncTaskbar({ visibleCount: Math.max(1, Math.min(3, Number(($event.target as HTMLInputElement).value) || 1)) })" />
+      </template>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.notification.enabled" @change="setNotificationsEnabled(($event.target as HTMLInputElement).checked)" /> 桌面通知</label>
       <label class="settings-label">提前通知小时数</label>
       <input class="hours-input" type="number" min="0" max="168" step="1" :value="configStore.config.notification.reminderHours" @change="setReminderHours(Number(($event.target as HTMLInputElement).value))" />
@@ -123,6 +136,7 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
 .settings-label { display:block; margin:8px 0 4px; color:var(--text-soft); }
 .settings-body input[type=range] { display:block; width:100%; }
 .hours-input { width:72px; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
+.taskbar-select { width:100%; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
 .font-picker { position:relative; }
 .font-picker-trigger { width:100%; display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
 .font-picker-trigger :deep(svg) { width:14px; height:14px; }

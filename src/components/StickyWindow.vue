@@ -338,6 +338,7 @@ onMounted(async () => {
   currentVersion.value = await getVersion().catch(() => "0.0.1");
   document.addEventListener("pointerdown", closeComposerNotesOnOutside);
   await configStore.load();
+  await invoke("sync_taskbar");
   await loadData();
   unlistenNotification = await listen("notification:sent", () => void taskStore.load());
   unlistenMoved = await windowApi.onMoved(({ payload }) => {

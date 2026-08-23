@@ -3,11 +3,11 @@ mod models;
 mod storage;
 mod taskbar;
 
+use std::sync::{Mutex, OnceLock};
 use storage::{SingleInstance, Store};
-use tauri::{AppHandle, Emitter, Manager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use std::sync::{Mutex, OnceLock};
+use tauri::{AppHandle, Emitter, Manager};
 
 static NOTIFICATION_CHECK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -15,43 +15,83 @@ static NOTIFICATION_CHECK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 /// paths); other desktop backends accept a sound-theme name.
 pub(crate) fn notification_sound() -> &'static str {
     #[cfg(target_os = "windows")]
-    { "IM" }
+    {
+        "IM"
+    }
     #[cfg(not(target_os = "windows"))]
-    { "message-new-instant" }
+    {
+        "message-new-instant"
+    }
 }
 
-fn due_within_window(end: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>, hours: i32) -> bool {
+fn due_within_window(
+    end: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    hours: i32,
+) -> bool {
     end - now <= chrono::Duration::hours(hours.clamp(0, 168) as i64)
 }
 
 fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, String> {
-    let _check_guard = NOTIFICATION_CHECK_LOCK.get_or_init(|| Mutex::new(())).lock().map_err(|_| "notification lock poisoned".to_string())?;
+    let _check_guard = NOTIFICATION_CHECK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "notification lock poisoned".to_string())?;
     use chrono::{DateTime, Utc};
     use tauri_plugin_notification::NotificationExt;
 
     let config = store.config();
-    if !config.notification.enabled { return Ok(0); }
+    if !config.notification.enabled {
+        return Ok(0);
+    }
     let now = Utc::now();
     let mut due = Vec::new();
     for task in &store.data().tasks {
-        if task.deleted_at.is_some() || task.notified_at.is_some() { continue; }
-        if !matches!(task.status, models::TaskStatus::Todo | models::TaskStatus::Doing) { continue; }
-        let Some(raw) = task.due_date.as_deref() else { continue; };
-        let Ok(end) = DateTime::parse_from_rfc3339(raw) else { continue; };
+        if task.deleted_at.is_some() || task.notified_at.is_some() {
+            continue;
+        }
+        if !matches!(
+            task.status,
+            models::TaskStatus::Todo | models::TaskStatus::Doing
+        ) {
+            continue;
+        }
+        let Some(raw) = task.due_date.as_deref() else {
+            continue;
+        };
+        let Ok(end) = DateTime::parse_from_rfc3339(raw) else {
+            continue;
+        };
         let end = end.with_timezone(&Utc);
-        if due_within_window(end, now, config.notification.reminder_hours) { due.push((task.id.clone(), task.title.clone(), end)); }
+        if due_within_window(end, now, config.notification.reminder_hours) {
+            due.push((task.id.clone(), task.title.clone(), end));
+        }
     }
-    if due.is_empty() { return Ok(0); }
+    if due.is_empty() {
+        return Ok(0);
+    }
 
-    let mut lines: Vec<String> = due.iter().take(5).map(|(_, title, end)| {
-        let seconds = (*end - now).num_seconds();
-        let remaining = if seconds <= 0 { "已到期".to_string() }
-        else if seconds < 3600 { format!("剩余 {} 分钟", (seconds + 59) / 60) }
-        else { format!("剩余 {} 小时", (seconds + 3599) / 3600) };
-        format!("{} · {}", title, remaining)
-    }).collect();
-    if due.len() > 5 { lines.push(format!("还有 {} 个任务", due.len() - 5)); }
-    let mut builder = app.notification().builder()
+    let mut lines: Vec<String> = due
+        .iter()
+        .take(5)
+        .map(|(_, title, end)| {
+            let seconds = (*end - now).num_seconds();
+            let remaining = if seconds <= 0 {
+                "已到期".to_string()
+            } else if seconds < 3600 {
+                format!("剩余 {} 分钟", (seconds + 59) / 60)
+            } else {
+                format!("剩余 {} 小时", (seconds + 3599) / 3600)
+            };
+            format!("{} · {}", title, remaining)
+        })
+        .collect();
+    if due.len() > 5 {
+        lines.push(format!("还有 {} 个任务", due.len() - 5));
+    }
+    let mut builder = app
+        .notification()
+        .builder()
         .title("任务提醒")
         .body(lines.join("\n"));
     if config.notification.sound_enabled {
@@ -68,7 +108,10 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
             }
         }
     });
-    let _ = app.emit("notification:sent", serde_json::json!({ "count": count, "notifiedAt": notified_at }));
+    let _ = app.emit(
+        "notification:sent",
+        serde_json::json!({ "count": count, "notifiedAt": notified_at }),
+    );
     Ok(count)
 }
 
@@ -89,7 +132,11 @@ mod notification_tests {
     fn reminder_window_matches_hours_and_clamps_bounds() {
         let now = Utc::now();
         assert!(due_within_window(now + Duration::hours(2), now, 2));
-        assert!(!due_within_window(now + Duration::hours(2) + Duration::seconds(1), now, 2));
+        assert!(!due_within_window(
+            now + Duration::hours(2) + Duration::seconds(1),
+            now,
+            2
+        ));
         assert!(due_within_window(now + Duration::hours(168), now, 999));
     }
 }
@@ -127,11 +174,9 @@ fn set_opacity(app: AppHandle, label: String, opacity: i32) {
 fn set_win_opacity(w: &tauri::webview::WebviewWindow, alpha: f64) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetLayeredWindowAttributes, LWA_ALPHA,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED,
     };
+    use windows::Win32::UI::WindowsAndMessaging::{SetLayeredWindowAttributes, LWA_ALPHA};
     let hwnd = w.hwnd().map_err(|e| e.to_string())?;
     let hwnd = HWND(hwnd.0 as _);
     unsafe {
@@ -141,22 +186,44 @@ fn set_win_opacity(w: &tauri::webview::WebviewWindow, alpha: f64) -> Result<(), 
             SetWindowLongW(hwnd, GWL_EXSTYLE, style);
         }
         let alpha = (255.0 * alpha) as u8;
-        let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), alpha, LWA_ALPHA);
+        let _ = SetLayeredWindowAttributes(
+            hwnd,
+            windows::Win32::Foundation::COLORREF(0),
+            alpha,
+            LWA_ALPHA,
+        );
     }
     Ok(())
 }
 
-#[tauri::command]
-fn position_taskbar(app: AppHandle, position: String) -> Result<bool, String> {
-    let (w, h) = (320i32, 96i32);
-    let (x, y) = taskbar::taskbar_anchor(&position, w, h);
-    if let Some(win) = app.get_webview_window("taskbar") {
-        let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
-        let _ = win.show();
-        Ok(true)
-    } else {
-        Ok(false)
+fn sync_taskbar_window(app: &AppHandle, store: &Store) -> Result<bool, String> {
+    let config = store.config();
+    let Some(win) = app.get_webview_window("taskbar") else {
+        return Ok(false);
+    };
+    if !config.taskbar.enabled {
+        let _ = win.hide();
+        return Ok(false);
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = win.hide();
+        return Ok(false);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let (w, h) = (320i32, 96i32);
+        let (x, y) = taskbar::taskbar_anchor(&config.taskbar.position, w, h);
+        win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+            .map_err(|e| e.to_string())?;
+        win.show().map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+fn sync_taskbar(app: AppHandle, store: tauri::State<'_, Store>) -> Result<bool, String> {
+    sync_taskbar_window(&app, &store)
 }
 
 #[tauri::command]
@@ -199,10 +266,18 @@ fn list_system_fonts() -> Vec<String> {
                 .collect();
             fonts.sort_unstable();
             fonts.dedup();
-            if !fonts.is_empty() { return fonts; }
+            if !fonts.is_empty() {
+                return fonts;
+            }
         }
     }
-    vec!["Arial".into(), "Segoe UI".into(), "sans-serif".into(), "serif".into(), "monospace".into()]
+    vec![
+        "Arial".into(),
+        "Segoe UI".into(),
+        "sans-serif".into(),
+        "serif".into(),
+        "monospace".into(),
+    ]
 }
 
 // ---------- 应用启动 ----------
@@ -261,12 +336,14 @@ pub fn run() {
             } else {
                 diag("!! sticky window NOT found after launch");
             }
+            let _ = sync_taskbar_window(app.handle(), &app.state::<Store>());
             // 钉住条定位
             // 托盘
             diag("building tray");
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let today = MenuItem::with_id(app, "today", "今日要务", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &today, &quit])?;
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
@@ -279,6 +356,7 @@ pub fn run() {
                             let _ = w.set_focus();
                         }
                     }
+                    "today" => show_popup(app.clone()),
                     _ => {}
                 })
                 .build(app)?;
@@ -311,7 +389,7 @@ pub fn run() {
             commands::purge_task,
             set_always_on_top,
             set_opacity,
-            position_taskbar,
+            sync_taskbar,
             show_popup,
             hide_window,
             list_system_fonts,

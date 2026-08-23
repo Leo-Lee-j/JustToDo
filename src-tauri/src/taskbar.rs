@@ -3,17 +3,21 @@
 
 #[cfg(windows)]
 pub fn taskbar_anchor(position: &str, bar_width: i32, bar_height: i32) -> (i32, i32) {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
     use windows::core::w;
+    use windows::Win32::Foundation::RECT;
     use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, HMONITOR, MONITORINFO,
-        MONITOR_DEFAULTTONEAREST,
+        GetMonitorInfoW, MonitorFromWindow, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
-    use windows::Win32::UI::Shell::{ABM_GETTASKBARPOS, SHAppBarMessage};
+    use windows::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
 
     let h = unsafe { FindWindowW(w!("Shell_TrayWnd"), None) };
-    let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
 
     if let Ok(h) = h {
         // 优先用 APPBARDATA 取任务栏矩形
@@ -23,12 +27,18 @@ pub fn taskbar_anchor(position: &str, bar_width: i32, bar_height: i32) -> (i32, 
         if unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &mut abd as *mut _ as _) } != 0 {
             rect = abd.rc;
         } else if unsafe { GetWindowRect(h, &mut rect).is_err() } {
-            rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
         }
     }
 
     // 取包含任务栏的显示器工作区
-    let hmon: HMONITOR = unsafe { MonitorFromWindow(h.unwrap_or_default(), MONITOR_DEFAULTTONEAREST) };
+    let hmon: HMONITOR =
+        unsafe { MonitorFromWindow(h.unwrap_or_default(), MONITOR_DEFAULTTONEAREST) };
     let mut mi = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
         ..unsafe { std::mem::zeroed() }
@@ -45,6 +55,13 @@ pub fn taskbar_anchor(position: &str, bar_width: i32, bar_height: i32) -> (i32, 
         "left" => work.left + 8,
         "center" => work.left + (work_w - bar_width) / 2,
         _ => work.left + work_w - bar_width - 8,
+    };
+    let y = if rect.top >= work.bottom {
+        rect.top - bar_height
+    } else if rect.bottom <= work.top {
+        rect.bottom
+    } else {
+        y
     };
     (x, y)
 }

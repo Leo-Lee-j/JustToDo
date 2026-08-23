@@ -57,7 +57,7 @@ export const useConfigStore = defineStore("config", {
           ...DEFAULT_CONFIG,
           ...cfg,
           general: { ...DEFAULT_CONFIG.general, ...cfg.general },
-          taskbar: { ...DEFAULT_CONFIG.taskbar, ...cfg.taskbar, enabled: false },
+          taskbar: { ...DEFAULT_CONFIG.taskbar, ...cfg.taskbar },
           notification: {
             ...DEFAULT_CONFIG.notification,
             ...cfg.notification,
