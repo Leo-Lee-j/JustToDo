@@ -17,9 +17,11 @@ import ChevronDown16 from "@carbon/icons-vue/lib/chevron--down/16.js";
 import { enable as enableAutostart, disable as disableAutostart } from "@tauri-apps/plugin-autostart";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { isPermissionGranted, requestPermission, sendNotification as sendNativeNotification } from "@tauri-apps/plugin-notification";
 import { useTaskStore } from "@/stores/taskStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useConfigStore } from "@/stores/configStore";
+import type { Task } from "@/types";
 import TaskItem from "./TaskItem.vue";
 import SettingsWindow from "./SettingsWindow.vue";
 
@@ -30,6 +32,8 @@ const configStore = useConfigStore();
 const newTitle = ref("");
 const newNotes = ref("");
 const newPriority = ref(2);
+const newDueDate = ref("");
+const dueDateInput = ref<HTMLInputElement | null>(null);
 const showComposerNotes = ref(false);
 const creatingTask = ref(false);
 const drag = ref(false);
@@ -59,6 +63,17 @@ const windowApi = getCurrentWindow();
 let unlistenMoved: (() => void) | undefined;
 let snapTimer: ReturnType<typeof setTimeout> | undefined;
 let snapping = false;
+let notificationTimer: ReturnType<typeof setInterval> | undefined;
+let notificationBatchRemaining = 0;
+let notificationBatchBody = "";
+function sendNotification(options: { title: string; body: string }) {
+  if (notificationBatchRemaining > 1) {
+    notificationBatchRemaining -= 1;
+    return;
+  }
+  sendNativeNotification({ title: "任务提醒", body: notificationBatchBody || options.body });
+  notificationBatchRemaining = 0;
+}
 // Physical window bounds include the frame/shadow differently on each edge.
 // Keep the visual gap consistent with small per-edge adjustments.
 const EDGE_MARGIN = { left: 12, top: 12, right: 8, bottom: 12 };
@@ -76,10 +91,44 @@ function formatHistoryTime(value: string) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
 }
 
+function formatRemainingTime(dueAt: number, now: number) {
+  const minutes = Math.ceil((dueAt - now) / 60000);
+  if (minutes <= 0) return "已到期";
+  if (minutes < 60) return `剩余 ${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `剩余 ${hours} 小时 ${rest} 分钟` : `剩余 ${hours} 小时`;
+}
+
 async function loadData() {
   await tabStore.load();
   await taskStore.load();
   if (tabStore.activeTabId) taskStore.activeTabId = tabStore.activeTabId;
+}
+
+async function checkNotifications(candidate?: Task) {
+  if (!configStore.config.notification.enabled) return;
+  let granted = await isPermissionGranted().catch(() => false);
+  if (!granted) granted = (await requestPermission().catch(() => "denied")) === "granted";
+  const hours = Math.max(0, configStore.config.notification.reminderHours ?? 1);
+  const now = Date.now();
+  const tasks = candidate ? [candidate, ...taskStore.tasks.filter((item) => item.id !== candidate.id)] : taskStore.tasks;
+  const eligible = tasks.filter((task) => task.dueDate && !task.deletedAt && task.status !== "done" && task.status !== "cancelled" && !task.notifiedAt && !Number.isNaN(new Date(task.dueDate).getTime()) && new Date(task.dueDate).getTime() - now <= hours * 3600_000);
+  notificationBatchRemaining = eligible.length;
+  const lines = eligible.slice(0, 5).map((task) => {
+    const due = new Date(task.dueDate as string).getTime();
+    return `${task.title} · ${formatRemainingTime(due, now)}`;
+  });
+  if (eligible.length > 5) lines.push(`还有 ${eligible.length - 5} 个任务`);
+  notificationBatchBody = lines.join("\n");
+  notificationBatchBody = lines.join("\n");
+  for (const task of tasks) {
+    if (!task.dueDate || task.deletedAt || task.status === "done" || task.status === "cancelled" || task.notifiedAt) continue;
+    const due = new Date(task.dueDate).getTime();
+    if (Number.isNaN(due) || due - now > hours * 3600_000) continue;
+    sendNotification({ title: "JustToDo", body: `任务即将结束：${task.title}` });
+    await taskStore.update(task.id, { notifiedAt: new Date().toISOString() });
+  }
 }
 
 async function addTask() {
@@ -88,19 +137,26 @@ async function addTask() {
   if (!t) return;
   creatingTask.value = true;
   try {
-    const task = await taskStore.create(t, tabStore.activeTabId);
+    const dueDate = newDueDate.value ? new Date(newDueDate.value).toISOString() : null;
+    const task = await taskStore.create(t, tabStore.activeTabId, dueDate);
     if (newNotes.value.trim() || newPriority.value !== 2) {
       await taskStore.update(task.id, { notes: newNotes.value.slice(0, 255), priority: newPriority.value });
     }
+    await checkNotifications(task);
     newTitle.value = "";
     newNotes.value = "";
     newPriority.value = 2;
+    newDueDate.value = "";
     showComposerNotes.value = false;
     await nextTick();
     taskListEl.value?.querySelector<HTMLElement>(`[data-task-id="${task.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } finally {
     creatingTask.value = false;
   }
+}
+
+function closeDueDatePicker() {
+  requestAnimationFrame(() => dueDateInput.value?.blur());
 }
 
 async function switchTab(id: string) {
@@ -275,7 +331,10 @@ async function snapToEdge(movedPosition?: { x: number; y: number }) {
 onMounted(async () => {
   currentVersion.value = await getVersion().catch(() => "0.0.1");
   document.addEventListener("pointerdown", closeComposerNotesOnOutside);
+  await configStore.load();
   await loadData();
+  await checkNotifications();
+  notificationTimer = setInterval(() => void checkNotifications(), 3600_000);
   unlistenMoved = await windowApi.onMoved(({ payload }) => {
     if (snapTimer) clearTimeout(snapTimer);
     snapTimer = setTimeout(() => void snapToEdge(payload), 120);
@@ -286,6 +345,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", closeComposerNotesOnOutside);
   if (snapTimer) clearTimeout(snapTimer);
   unlistenMoved?.();
+  if (notificationTimer) clearInterval(notificationTimer);
 });
 
 function closeComposerNotesOnOutside(event: PointerEvent) {
@@ -325,7 +385,8 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
       <div v-for="entry in taskStore.history" :key="entry.id" class="history-item" :class="{ 'history-done': entry.status === 'done' && !entry.deleted, 'history-deleted': entry.deleted }">
         <span class="history-content">
           <span class="history-title"><span v-if="entry.deleted" class="history-emoji" aria-hidden="true">😞</span><span v-else-if="entry.status === 'done'" class="history-emoji" aria-hidden="true">🎉</span>{{ entry.title }}</span>
-          <span class="history-time">{{ formatHistoryTime(entry.timestamp) }}</span>
+          <span class="history-time">更新时间：{{ formatHistoryTime(entry.updatedAt || entry.timestamp) }}</span>
+          <span v-if="entry.dueDate" class="history-time">结束时间：{{ formatHistoryTime(entry.dueDate) }}</span>
         </span>
         <button v-if="entry.deleted" class="history-restore" title="恢复任务" aria-label="恢复任务" @click="restoreFromHistory(entry.taskId)"><Undo16 /></button>
       </div>
@@ -419,6 +480,7 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
         <button class="composer-priority" :class="`priority-${newPriority}`" @click="newPriority = newPriority >= 4 ? 0 : newPriority + 1" title="调整优先级" aria-label="调整优先级">
           P{{ newPriority }}
         </button>
+        <input ref="dueDateInput" v-model="newDueDate" class="composer-due" type="datetime-local" step="3600" title="设置结束时间" aria-label="设置结束时间" @keydown.prevent @change="closeDueDatePicker" />
         <button class="composer-notes-toggle" :class="{ active: showComposerNotes }" @mousedown.prevent @click="showComposerNotes = !showComposerNotes" :title="showComposerNotes ? '关闭备注' : '添加备注'" :aria-label="showComposerNotes ? '关闭备注' : '展开备注'">
           <component :is="showComposerNotes ? Close16 : TextAlignLeft16" />
         </button>
@@ -655,7 +717,7 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
 }
 .input-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   position: relative;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
@@ -663,8 +725,9 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
 }
 .input-bar > input { display: none; }
 .input-bar > .add-btn { display: none; }
-.composer-main { display: flex; align-items: center; flex: 1; min-width: 0; gap: 6px; }
-.composer-main input { flex: 1; min-width: 0; background: var(--bg-soft); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+.composer-main { display:flex; align-items:center; flex-wrap:wrap; width:100%; min-width:0; gap:6px; }
+.composer-main > input:first-child { flex:1 0 100%; min-width:0; background:var(--bg-soft); border-radius:6px; padding:6px 10px; font-size:13px; }
+.composer-due { flex:1 1 190px; min-width:165px; max-width:165px; padding:5px 6px; border:1px solid var(--border); border-radius:6px; background:var(--bg-soft); color:var(--text); font-size:10px; }
 .composer-priority { display:inline-flex; align-items:center; justify-content:center; min-width:26px; height:24px; padding:0 5px; border-radius:4px; font-size:10px; font-weight:600; line-height:1; }
 .composer-priority.priority-0 { background:#fde2e2; color:#b42318; }
 .composer-priority.priority-1 { background:#ffead5; color:#b54708; }

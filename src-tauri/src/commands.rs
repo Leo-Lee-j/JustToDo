@@ -13,6 +13,8 @@ fn record_history(store: &Store, task: &Task, operation: &str, deleted: bool) {
         timestamp: now_utc(),
         deleted,
         status: task.status.clone(),
+        updated_at: task.updated_at.clone(),
+        due_date: task.due_date.clone(),
     };
     store.with_data_mut(|d| {
         d.history.push(entry);
@@ -49,7 +51,7 @@ pub fn set_config(store: State<'_, Store>, config: Config) {
 }
 
 #[tauri::command]
-pub fn create_task(app: AppHandle, store: State<'_, Store>, title: String, tab_id: String) -> Task {
+pub fn create_task(app: AppHandle, store: State<'_, Store>, title: String, tab_id: String, due_date: Option<String>) -> Task {
     let now = now_utc();
     let order = store.data().tasks.iter().filter(|t| t.tab_id == tab_id).count() as i32;
     let task = Task {
@@ -59,7 +61,7 @@ pub fn create_task(app: AppHandle, store: State<'_, Store>, title: String, tab_i
         tab_id: tab_id.clone(),
         category_id: "cat-other".into(),
         priority: 2,
-        due_date: None,
+        due_date,
         reminder_time: None,
         reminder_enabled: false,
         notified_at: None,
@@ -117,13 +119,18 @@ pub fn update_task(
                 t.category_id = v.to_string();
             }
             if let Some(v) = patch.get("dueDate") {
-                t.due_date = v.as_str().map(|s| s.to_string());
+                let next = v.as_str().map(|s| s.to_string());
+                if next != t.due_date { t.notified_at = None; }
+                t.due_date = next;
             }
             if let Some(v) = patch.get("reminderTime") {
                 t.reminder_time = v.as_str().map(|s| s.to_string());
             }
             if let Some(v) = patch.get("reminderEnabled").and_then(|v| v.as_bool()) {
                 t.reminder_enabled = v;
+            }
+            if let Some(v) = patch.get("notifiedAt") {
+                t.notified_at = v.as_str().map(|s| s.to_string());
             }
             if let Some(v) = patch.get("notes").and_then(|v| v.as_str()) {
                 t.notes = v.to_string();

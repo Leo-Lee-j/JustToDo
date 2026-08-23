@@ -36,6 +36,11 @@ const updatedLabel = computed(() => {
   if (date.toDateString() === yesterday.toDateString()) return `昨天 ${time}`;
   return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
 });
+const dueLabel = computed(() => {
+  if (!props.task.dueDate) return "";
+  const date = new Date(props.task.dueDate);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+});
 watch(() => props.task.notes, (value) => { notes.value = value || ""; });
 
 async function saveNotes() {
@@ -104,13 +109,13 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", closeSwipe));
       <button class="swipe-delete" :class="{ revealed }" :style="{ opacity: Math.min(1, swipeX / deleteWidth) }" @click.stop="del" aria-label="删除任务" title="删除任务">
         <TrashCan16 />
       </button>
-      <div class="task" :class="{ done: isDone, swiping }" :style="{ background: isDone ? 'linear-gradient(90deg, #d7f0dc 0%, #f3fbf4 100%)' : (category ? category.color + '14' : 'transparent'), transform: `translateX(${swipeX}px)` }" @click="onTaskClick" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
+      <div class="task" :title="`更新时间：${updatedLabel}`" :class="{ done: isDone, swiping }" :style="{ background: isDone ? 'linear-gradient(90deg, #d7f0dc 0%, #f3fbf4 100%)' : (category ? category.color + '14' : 'transparent'), transform: `translateX(${swipeX}px)` }" @click="onTaskClick" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
       <div class="color-bar" :style="{ background: category?.color || '#9B9B9B' }"></div>
       <button class="check" @click.stop="toggle" :aria-label="isDone ? '标记未完成' : '标记完成'">{{ isDone ? "✓" : "○" }}</button>
        <button class="check-modern" @click.stop="toggle" :aria-label="isDone ? '标记未完成' : '标记完成'" :title="isDone ? '标记未完成' : '标记完成'"><component :is="isDone ? CheckboxChecked16 : Checkbox16" /></button>
        <div class="content">
         <span class="title">{{ task.title }}</span>
-        <span v-if="updatedLabel" class="updated-at">更新于 {{ updatedLabel }}</span>
+        <span v-if="dueLabel" class="updated-at">结束：{{ dueLabel }}</span>
       </div>
       <button class="priority-tag" :class="`priority-${priority}`" @click.stop="cyclePriority" title="调整优先级" aria-label="调整优先级">
         P{{ priority }}

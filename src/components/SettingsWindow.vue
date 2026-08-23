@@ -43,6 +43,12 @@ async function setLaunchOnStartup(enabled: boolean) {
     await configStore.update({ general: { ...configStore.config.general, launchOnStartup: enabled } });
   } catch { updateStatus.value = "无法修改开机启动设置"; }
 }
+async function setNotificationsEnabled(enabled: boolean) {
+  await configStore.update({ notification: { ...configStore.config.notification, enabled } });
+}
+async function setReminderHours(value: number) {
+  await configStore.update({ notification: { ...configStore.config.notification, reminderHours: Math.max(0, Math.min(168, value || 0)) } });
+}
 async function checkForUpdates() {
   if (updateBusy.value) return;
   updateBusy.value = true; updateStatus.value = "正在检查更新..."; updateProgress.value = 0;
@@ -76,6 +82,9 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
       <label class="settings-label">背景透明度 {{ configStore.config.window.opacity }}%</label>
       <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @input="setOpacity(Number(($event.target as HTMLInputElement).value))" />
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.general.launchOnStartup" @change="setLaunchOnStartup(($event.target as HTMLInputElement).checked)" /> 开机自启动</label>
+      <label class="settings-check"><input type="checkbox" :checked="configStore.config.notification.enabled" @change="setNotificationsEnabled(($event.target as HTMLInputElement).checked)" /> 桌面通知</label>
+      <label class="settings-label">提前通知小时数</label>
+      <input class="hours-input" type="number" min="0" max="168" step="1" :value="configStore.config.notification.reminderHours" @change="setReminderHours(Number(($event.target as HTMLInputElement).value))" />
       <div class="version-label">当前版本 v{{ currentVersion }}</div>
       <button class="update-btn" :disabled="updateBusy" @click="checkForUpdates">{{ updateBusy ? "处理中..." : "检查更新" }}</button>
       <div v-if="availableVersion" class="update-release">新版本 v{{ availableVersion }}<div class="update-notes">{{ updateNotes }}</div></div>
@@ -95,6 +104,7 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
 .settings-body { padding:12px; font-size:11px; }
 .settings-label { display:block; margin:8px 0 4px; color:var(--text-soft); }
 .settings-body input[type=range] { display:block; width:100%; }
+.hours-input { width:72px; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
 .font-picker { position:relative; }
 .font-picker-trigger { width:100%; display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
 .font-picker-trigger :deep(svg) { width:14px; height:14px; }

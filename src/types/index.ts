@@ -43,6 +43,8 @@ export interface TaskHistoryEntry {
   timestamp: string;
   deleted: boolean;
   status: TaskStatus;
+  updatedAt: string;
+  dueDate: string | null;
 }
 
 export interface Tab {
@@ -83,6 +85,7 @@ export interface TaskbarConfig {
 
 export interface NotificationConfig {
   enabled: boolean;
+  reminderHours: number;
   reminderType: "1hour" | "today" | "tomorrow" | "custom";
   soundEnabled: boolean;
 }

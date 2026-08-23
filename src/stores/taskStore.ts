@@ -60,8 +60,9 @@ export const useTaskStore = defineStore("task", {
         if (t) t.deletedAt = null;
       });
     },
-    async create(title: string, tabId: string) {
-      const task = await invoke<Task>("create_task", { title, tabId });
+    async create(title: string, tabId: string, dueDate: string | null = null) {
+      const task = await invoke<Task>("create_task", { title, tabId, dueDate });
+      if (!this.tasks.some((item) => item.id === task.id)) this.tasks.push(task);
       await this.refreshHistory();
       return task;
     },

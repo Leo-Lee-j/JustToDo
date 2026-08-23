@@ -21,6 +21,7 @@ const DEFAULT_CONFIG: Config = {
   },
   notification: {
     enabled: true,
+    reminderHours: 1,
     reminderType: "1hour",
     soundEnabled: true,
   },
@@ -47,6 +48,11 @@ export const useConfigStore = defineStore("config", {
           ...cfg,
           general: { ...DEFAULT_CONFIG.general, ...cfg.general },
           taskbar: { ...DEFAULT_CONFIG.taskbar, ...cfg.taskbar, enabled: false },
+          notification: {
+            ...DEFAULT_CONFIG.notification,
+            ...cfg.notification,
+            reminderHours: Math.max(0, Math.min(168, Number(cfg.notification?.reminderHours ?? (cfg.notification?.reminderType === "1hour" ? 1 : 0)))),
+          },
         };
         if (!cfg.general?.fontFamily || cfg.general.fontFamily === "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif") {
           this.config.general.fontFamily = DEFAULT_CONFIG.general.fontFamily;

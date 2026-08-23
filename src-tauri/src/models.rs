@@ -62,6 +62,10 @@ pub struct TaskHistoryEntry {
     pub deleted: bool,
     #[serde(default = "default_history_status")]
     pub status: TaskStatus,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub due_date: Option<String>,
 }
 
 fn default_history_status() -> TaskStatus { TaskStatus::Todo }
@@ -114,9 +118,14 @@ pub struct TaskbarConfig {
 #[serde(rename_all = "camelCase")]
 pub struct NotificationConfig {
     pub enabled: bool,
+    #[serde(default = "default_reminder_hours")]
+    pub reminder_hours: i32,
+    #[serde(default)]
     pub reminder_type: String,
     pub sound_enabled: bool,
 }
+
+fn default_reminder_hours() -> i32 { 1 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +184,7 @@ impl Default for Config {
             },
             notification: NotificationConfig {
                 enabled: true,
+                reminder_hours: 1,
                 reminder_type: "1hour".into(),
                 sound_enabled: true,
             },
