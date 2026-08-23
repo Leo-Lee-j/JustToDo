@@ -10,7 +10,7 @@
 
 ## 发布
 
-提交并推送语义化版本 tag，例如：`git tag v1.0.1; git push origin v1.0.1`。
+提交并推送语义化版本 tag，例如：`git tag v0.0.1; git push origin v0.0.1`。
 GitHub Actions 会构建 Windows 安装包、签名文件和 `latest.json`，并上传到 Release。
 
 客户端设置中的“检查更新”从 `releases/latest/download/latest.json` 查询更新，显示版本、更新说明和下载进度，下载完成后自动重启安装。

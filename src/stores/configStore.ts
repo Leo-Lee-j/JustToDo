@@ -30,7 +30,7 @@ const DEFAULT_CONFIG: Config = {
     fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   },
   theme: "light",
-  version: "1.0.0",
+  version: "0.0.1",
 };
 
 export const useConfigStore = defineStore("config", {

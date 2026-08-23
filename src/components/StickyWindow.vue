@@ -39,7 +39,7 @@ const creatingTab = ref(false);
 const confirmDeleteTabId = ref<string | null>(null);
 const showHistory = ref(false);
 const updateStatus = ref("");
-const currentVersion = ref("1.0.0");
+const currentVersion = ref("0.0.1");
 const availableVersion = ref("");
 const updateNotes = ref("");
 const updateProgress = ref(0);
@@ -270,7 +270,7 @@ async function snapToEdge(movedPosition?: { x: number; y: number }) {
 }
 
 onMounted(async () => {
-  currentVersion.value = await getVersion().catch(() => "1.0.0");
+  currentVersion.value = await getVersion().catch(() => "0.0.1");
   document.addEventListener("pointerdown", closeComposerNotesOnOutside);
   await loadData();
   unlistenMoved = await windowApi.onMoved(({ payload }) => {
