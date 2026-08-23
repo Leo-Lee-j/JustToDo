@@ -41,3 +41,4 @@ Desktop.ini
 # Local agent/tool state
 .omc/
 .claude/settings.local.json
+AGENTS.md

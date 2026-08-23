@@ -32,6 +32,38 @@ jobs:
         run: npm run build
       - name: Verify backend
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Prepare release notes
+        id: release_notes
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}' -replace '^v', ''
+          $pattern = "(?ms)^##\s+\[?$([regex]::Escape($version))\]?[^\r\n]*\r?\n(?<body>.*?)(?=^##\s+\[?\d+\.\d+\.\d+\]?|\z)"
+          $content = Get-Content -LiteralPath 'CHANGELOG.md' -Raw
+          $match = [regex]::Match($content, $pattern)
+          if (-not $match.Success) {
+            throw "CHANGELOG.md is missing a release section for version $version."
+          }
+          $notes = $match.Groups['body'].Value.Trim()
+          if ([string]::IsNullOrWhiteSpace($notes)) {
+            throw "CHANGELOG.md release section for version $version is empty."
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'body<<RELEASE_NOTES'
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value $notes
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'RELEASE_NOTES'
+
+      # Installer bundles can be produced without updater metadata when the
+      # signing key is missing. Fail early instead of publishing a release that
+      # can never be discovered by the in-app updater.
+      - name: Verify updater signing configuration
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'Missing repository secret SIGNING_PRIVATE_KEY; updater artifacts will not be generated.'
+          }
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -41,8 +73,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: JustToDo ${{ github.ref_name }}
-          releaseBody: |-
-            请查看本次 Release 的更新说明。
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
@@ -59,3 +90,16 @@ jobs:
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify updater metadata was published
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/latest.json"
+          try {
+            $response = Invoke-WebRequest -Uri $assetUrl -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } -UseBasicParsing -TimeoutSec 30
+            if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
+          } catch {
+            throw "latest.json was not published at $assetUrl: $($_.Exception.Message)"
+          }
