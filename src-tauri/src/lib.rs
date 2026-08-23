@@ -4,9 +4,89 @@ mod storage;
 mod taskbar;
 
 use storage::{SingleInstance, Store};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use std::sync::{Mutex, OnceLock};
+
+static NOTIFICATION_CHECK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn due_within_window(end: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>, hours: i32) -> bool {
+    end - now <= chrono::Duration::hours(hours.clamp(0, 168) as i64)
+}
+
+fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, String> {
+    let _check_guard = NOTIFICATION_CHECK_LOCK.get_or_init(|| Mutex::new(())).lock().map_err(|_| "notification lock poisoned".to_string())?;
+    use chrono::{DateTime, Utc};
+    use tauri_plugin_notification::NotificationExt;
+
+    let config = store.config();
+    if !config.notification.enabled { return Ok(0); }
+    let now = Utc::now();
+    let mut due = Vec::new();
+    for task in &store.data().tasks {
+        if task.deleted_at.is_some() || task.notified_at.is_some() { continue; }
+        if !matches!(task.status, models::TaskStatus::Todo | models::TaskStatus::Doing) { continue; }
+        let Some(raw) = task.due_date.as_deref() else { continue; };
+        let Ok(end) = DateTime::parse_from_rfc3339(raw) else { continue; };
+        let end = end.with_timezone(&Utc);
+        if due_within_window(end, now, config.notification.reminder_hours) { due.push((task.id.clone(), task.title.clone(), end)); }
+    }
+    if due.is_empty() { return Ok(0); }
+
+    let mut lines: Vec<String> = due.iter().take(5).map(|(_, title, end)| {
+        let seconds = (*end - now).num_seconds();
+        let remaining = if seconds <= 0 { "已到期".to_string() }
+        else if seconds < 3600 { format!("剩余 {} 分钟", (seconds + 59) / 60) }
+        else { format!("剩余 {} 小时", (seconds + 3599) / 3600) };
+        format!("{} · {}", title, remaining)
+    }).collect();
+    if due.len() > 5 { lines.push(format!("还有 {} 个任务", due.len() - 5)); }
+    app.notification().builder()
+        .title("任务提醒")
+        .body(lines.join("\n"))
+        .show()
+        .map_err(|e| e.to_string())?;
+
+    let notified_at = models::now_utc();
+    let count = due.len();
+    store.with_data_mut(|data| {
+        for (id, _, _) in &due {
+            if let Some(task) = data.tasks.iter_mut().find(|task| task.id == *id) {
+                task.notified_at = Some(notified_at.clone());
+            }
+        }
+    });
+    let _ = app.emit("notification:sent", serde_json::json!({ "count": count, "notifiedAt": notified_at }));
+    Ok(count)
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::due_within_window;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn zero_hours_only_matches_due_or_overdue() {
+        let now = Utc::now();
+        assert!(due_within_window(now, now, 0));
+        assert!(due_within_window(now - Duration::minutes(1), now, 0));
+        assert!(!due_within_window(now + Duration::minutes(1), now, 0));
+    }
+
+    #[test]
+    fn reminder_window_matches_hours_and_clamps_bounds() {
+        let now = Utc::now();
+        assert!(due_within_window(now + Duration::hours(2), now, 2));
+        assert!(!due_within_window(now + Duration::hours(2) + Duration::seconds(1), now, 2));
+        assert!(due_within_window(now + Duration::hours(168), now, 999));
+    }
+}
+
+#[tauri::command]
+fn check_notifications(app: AppHandle, store: tauri::State<'_, Store>) -> Result<usize, String> {
+    check_due_notifications(&app, &store)
+}
 
 // ---------- 窗口控制命令 ----------
 
@@ -192,6 +272,12 @@ pub fn run() {
                 })
                 .build(app)?;
             diag("setup() done, returning Ok");
+            let scheduler_app = app.handle().clone();
+            let _ = check_due_notifications(&scheduler_app, &app.state::<Store>());
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+                let _ = check_due_notifications(&scheduler_app, &scheduler_app.state::<Store>());
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -199,6 +285,8 @@ pub fn run() {
             commands::get_tabs_and_categories,
             commands::get_config,
             commands::set_config,
+            commands::send_test_notification,
+            check_notifications,
             commands::create_task,
             commands::update_task,
             commands::reorder_tasks,

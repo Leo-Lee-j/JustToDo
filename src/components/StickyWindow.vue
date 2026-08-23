@@ -2,6 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import draggable from "vuedraggable";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, currentMonitor, PhysicalPosition } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import pin16 from "@carbon/icons/es/pin/16.js";
@@ -61,9 +62,9 @@ const filteredFonts = computed(() => {
 });
 const windowApi = getCurrentWindow();
 let unlistenMoved: (() => void) | undefined;
+let unlistenNotification: (() => void) | undefined;
 let snapTimer: ReturnType<typeof setTimeout> | undefined;
 let snapping = false;
-let notificationTimer: ReturnType<typeof setInterval> | undefined;
 let notificationBatchRemaining = 0;
 let notificationBatchBody = "";
 function sendNotification(options: { title: string; body: string }) {
@@ -110,17 +111,22 @@ async function checkNotifications(candidate?: Task) {
   if (!configStore.config.notification.enabled) return;
   let granted = await isPermissionGranted().catch(() => false);
   if (!granted) granted = (await requestPermission().catch(() => "denied")) === "granted";
+  if (!granted) return;
   const hours = Math.max(0, configStore.config.notification.reminderHours ?? 1);
   const now = Date.now();
   const tasks = candidate ? [candidate, ...taskStore.tasks.filter((item) => item.id !== candidate.id)] : taskStore.tasks;
   const eligible = tasks.filter((task) => task.dueDate && !task.deletedAt && task.status !== "done" && task.status !== "cancelled" && !task.notifiedAt && !Number.isNaN(new Date(task.dueDate).getTime()) && new Date(task.dueDate).getTime() - now <= hours * 3600_000);
+  if (!eligible.length) {
+    notificationBatchRemaining = 0;
+    notificationBatchBody = "";
+    return;
+  }
   notificationBatchRemaining = eligible.length;
   const lines = eligible.slice(0, 5).map((task) => {
     const due = new Date(task.dueDate as string).getTime();
     return `${task.title} · ${formatRemainingTime(due, now)}`;
   });
   if (eligible.length > 5) lines.push(`还有 ${eligible.length - 5} 个任务`);
-  notificationBatchBody = lines.join("\n");
   notificationBatchBody = lines.join("\n");
   for (const task of tasks) {
     if (!task.dueDate || task.deletedAt || task.status === "done" || task.status === "cancelled" || task.notifiedAt) continue;
@@ -142,7 +148,7 @@ async function addTask() {
     if (newNotes.value.trim() || newPriority.value !== 2) {
       await taskStore.update(task.id, { notes: newNotes.value.slice(0, 255), priority: newPriority.value });
     }
-    await checkNotifications(task);
+    await invoke("check_notifications").catch(() => undefined);
     newTitle.value = "";
     newNotes.value = "";
     newPriority.value = 2;
@@ -333,8 +339,7 @@ onMounted(async () => {
   document.addEventListener("pointerdown", closeComposerNotesOnOutside);
   await configStore.load();
   await loadData();
-  await checkNotifications();
-  notificationTimer = setInterval(() => void checkNotifications(), 3600_000);
+  unlistenNotification = await listen("notification:sent", () => void taskStore.load());
   unlistenMoved = await windowApi.onMoved(({ payload }) => {
     if (snapTimer) clearTimeout(snapTimer);
     snapTimer = setTimeout(() => void snapToEdge(payload), 120);
@@ -345,7 +350,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", closeComposerNotesOnOutside);
   if (snapTimer) clearTimeout(snapTimer);
   unlistenMoved?.();
-  if (notificationTimer) clearInterval(notificationTimer);
+  unlistenNotification?.();
 });
 
 function closeComposerNotesOnOutside(event: PointerEvent) {

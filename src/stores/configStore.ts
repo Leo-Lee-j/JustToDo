@@ -34,6 +34,16 @@ const DEFAULT_CONFIG: Config = {
   version: "0.0.1",
 };
 
+function legacyReminderHours(value: string | undefined): number {
+  switch (value) {
+    case "today": return 24;
+    case "tomorrow": return 48;
+    case "custom": return 1;
+    case "1hour": return 1;
+    default: return 1;
+  }
+}
+
 export const useConfigStore = defineStore("config", {
   state: () => ({
     config: DEFAULT_CONFIG,
@@ -51,7 +61,7 @@ export const useConfigStore = defineStore("config", {
           notification: {
             ...DEFAULT_CONFIG.notification,
             ...cfg.notification,
-            reminderHours: Math.max(0, Math.min(168, Number(cfg.notification?.reminderHours ?? (cfg.notification?.reminderType === "1hour" ? 1 : 0)))),
+            reminderHours: Math.max(0, Math.min(168, Number(cfg.notification?.reminderHours ?? legacyReminderHours(cfg.notification?.reminderType)))),
           },
         };
         if (!cfg.general?.fontFamily || cfg.general.fontFamily === "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif") {

@@ -117,15 +117,19 @@ pub struct TaskbarConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationConfig {
+    #[serde(default = "default_notifications_enabled")]
     pub enabled: bool,
     #[serde(default = "default_reminder_hours")]
     pub reminder_hours: i32,
     #[serde(default)]
     pub reminder_type: String,
+    #[serde(default = "default_sound_enabled")]
     pub sound_enabled: bool,
 }
 
 fn default_reminder_hours() -> i32 { 1 }
+fn default_notifications_enabled() -> bool { true }
+fn default_sound_enabled() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

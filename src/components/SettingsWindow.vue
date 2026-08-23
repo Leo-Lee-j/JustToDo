@@ -5,6 +5,7 @@ import { enable as enableAutostart, disable as disableAutostart } from "@tauri-a
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import ChevronDown16 from "@carbon/icons-vue/lib/chevron--down/16.js";
 import Close16 from "@carbon/icons-vue/lib/close/16.js";
 import { useConfigStore } from "@/stores/configStore";
@@ -17,6 +18,7 @@ const updateNotes = ref("");
 const updateProgress = ref(0);
 const updateStatus = ref("");
 const updateBusy = ref(false);
+const notificationPermission = ref<"granted" | "denied" | "unknown">("unknown");
 const systemFonts = ref<string[]>([]);
 const fontSearch = ref("");
 const fontPickerOpen = ref(false);
@@ -45,9 +47,23 @@ async function setLaunchOnStartup(enabled: boolean) {
 }
 async function setNotificationsEnabled(enabled: boolean) {
   await configStore.update({ notification: { ...configStore.config.notification, enabled } });
+  if (enabled) await invoke("check_notifications").catch(() => undefined);
 }
 async function setReminderHours(value: number) {
   await configStore.update({ notification: { ...configStore.config.notification, reminderHours: Math.max(0, Math.min(168, value || 0)) } });
+  if (configStore.config.notification.enabled) await invoke("check_notifications").catch(() => undefined);
+}
+async function setSoundEnabled(enabled: boolean) {
+  await configStore.update({ notification: { ...configStore.config.notification, soundEnabled: enabled } });
+}
+async function refreshNotificationPermission() {
+  notificationPermission.value = (await isPermissionGranted().catch(() => false)) ? "granted" : "denied";
+}
+async function testNotification() {
+  let granted = await isPermissionGranted().catch(() => false);
+  if (!granted) granted = (await requestPermission().catch(() => "denied")) === "granted";
+  notificationPermission.value = granted ? "granted" : "denied";
+  if (granted) await invoke("send_test_notification").catch(() => undefined);
 }
 async function checkForUpdates() {
   if (updateBusy.value) return;
@@ -67,7 +83,7 @@ async function checkForUpdates() {
   finally { updateBusy.value = false; }
 }
 function close() { emit("close"); }
-onMounted(async () => { await configStore.load(); currentVersion.value = await getVersion().catch(() => "0.0.1"); await loadSystemFonts(); });
+onMounted(async () => { await configStore.load(); currentVersion.value = await getVersion().catch(() => "0.0.1"); await loadSystemFonts(); await refreshNotificationPermission(); });
 </script>
 
 <template>
@@ -85,6 +101,8 @@ onMounted(async () => { await configStore.load(); currentVersion.value = await g
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.notification.enabled" @change="setNotificationsEnabled(($event.target as HTMLInputElement).checked)" /> 桌面通知</label>
       <label class="settings-label">提前通知小时数</label>
       <input class="hours-input" type="number" min="0" max="168" step="1" :value="configStore.config.notification.reminderHours" @change="setReminderHours(Number(($event.target as HTMLInputElement).value))" />
+      <label class="settings-check"><input type="checkbox" :checked="configStore.config.notification.soundEnabled" @change="setSoundEnabled(($event.target as HTMLInputElement).checked)" /> 通知声音</label>
+      <div class="notification-actions"><span>权限：{{ notificationPermission === "granted" ? "已允许" : notificationPermission === "denied" ? "未允许" : "未知" }}</span><button class="update-btn" @click="testNotification">测试通知</button></div>
       <div class="version-label">当前版本 v{{ currentVersion }}</div>
       <button class="update-btn" :disabled="updateBusy" @click="checkForUpdates">{{ updateBusy ? "处理中..." : "检查更新" }}</button>
       <div v-if="availableVersion" class="update-release">新版本 v{{ availableVersion }}<div class="update-notes">{{ updateNotes }}</div></div>

@@ -51,6 +51,19 @@ pub fn set_config(store: State<'_, Store>, config: Config) {
 }
 
 #[tauri::command]
+pub fn send_test_notification(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    // Keep this command independent from task state so it can also diagnose
+    // Windows notification permission from the settings window.
+    app.notification()
+        .builder()
+        .title("JustToDo")
+        .body("任务提醒测试")
+        .show()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn create_task(app: AppHandle, store: State<'_, Store>, title: String, tab_id: String, due_date: Option<String>) -> Task {
     let now = now_utc();
     let order = store.data().tasks.iter().filter(|t| t.tab_id == tab_id).count() as i32;
@@ -141,7 +154,10 @@ pub fn update_task(
     });
     if let Ok(ref task) = result {
         // Record history after releasing the data lock; record_history acquires it again.
-        record_history(&store, task, "updated", task.deleted_at.is_some());
+        let notification_only = patch.as_object().map(|obj| obj.keys().all(|key| key == "notifiedAt")).unwrap_or(false);
+        if !notification_only {
+            record_history(&store, task, "updated", task.deleted_at.is_some());
+        }
         emit_task(&app, "task:updated", task);
     }
     result
