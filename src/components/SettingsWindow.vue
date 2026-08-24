@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable as enableAutostart, disable as disableAutostart } from "@tauri-apps/plugin-autostart";
 import { check } from "@tauri-apps/plugin-updater";
@@ -21,93 +21,186 @@ const updateNotes = ref("");
 const updateProgress = ref(0);
 const updateStatus = ref("");
 const updateBusy = ref(false);
+const showUpdateConfirmation = ref(false);
 const notificationPermission = ref<"granted" | "denied" | "unknown">("unknown");
 const systemFonts = ref<string[]>([]);
 const fontSearch = ref("");
 const fontPickerOpen = ref(false);
+const fontLoading = ref(false);
 const recordingShortcut = ref<keyof ShortcutConfig | null>(null);
+const fallbackFonts = ["Microsoft YaHei", "Arial", "Segoe UI", "sans-serif", "serif", "monospace"];
+let pendingUpdate: Awaited<ReturnType<typeof check>> = null;
+
 const filteredFonts = computed(() => {
   const query = fontSearch.value.trim().toLowerCase();
   return query ? systemFonts.value.filter((font) => font.toLowerCase().includes(query)) : systemFonts.value;
 });
 
 async function loadSystemFonts() {
-  try { systemFonts.value = await invoke<string[]>("list_system_fonts"); }
-  catch { systemFonts.value = ["Microsoft YaHei", "Arial", "Segoe UI", "sans-serif", "serif", "monospace"]; }
+  if (fontLoading.value || systemFonts.value.length) return;
+
+  fontLoading.value = true;
+  try {
+    const fonts = await invoke<string[]>("list_system_fonts");
+    systemFonts.value = fonts.length ? fonts : fallbackFonts;
+  } catch {
+    systemFonts.value = fallbackFonts;
+  } finally {
+    fontLoading.value = false;
+  }
 }
+
+watch(fontPickerOpen, (isOpen) => {
+  if (isOpen) void loadSystemFonts();
+});
+
 async function setFontFamily(value: string) {
   await configStore.update({ general: { ...configStore.config.general, fontFamily: value } });
   fontPickerOpen.value = false;
 }
+
 async function setOpacity(value: number) {
   await configStore.update({ window: { ...configStore.config.window, opacity: value } });
   await invoke("set_opacity", { label: "sticky", opacity: value });
 }
+
 async function setLaunchOnStartup(enabled: boolean) {
   try {
     if (enabled) await enableAutostart(); else await disableAutostart();
     await configStore.update({ general: { ...configStore.config.general, launchOnStartup: enabled } });
-  } catch { updateStatus.value = "无法修改开机启动设置"; }
+  } catch {
+    updateStatus.value = "无法修改开机启动设置";
+  }
 }
+
 async function setNotificationsEnabled(enabled: boolean) {
   await configStore.update({ notification: { ...configStore.config.notification, enabled } });
   if (enabled) await invoke("check_notifications").catch(() => undefined);
 }
+
 async function setReminderHours(value: number) {
   await configStore.update({ notification: { ...configStore.config.notification, reminderHours: Math.max(0, Math.min(168, value || 0)) } });
   if (configStore.config.notification.enabled) await invoke("check_notifications").catch(() => undefined);
 }
+
 async function setSoundEnabled(enabled: boolean) {
   await configStore.update({ notification: { ...configStore.config.notification, soundEnabled: enabled } });
 }
+
 async function syncTaskbar(patch: Partial<typeof configStore.config.taskbar>) {
   await configStore.update({ taskbar: { ...configStore.config.taskbar, ...patch } });
   await invoke("sync_taskbar");
 }
+
 async function refreshNotificationPermission() {
-  try { notificationPermission.value = (await isPermissionGranted()) ? "granted" : "unknown"; }
-  catch { notificationPermission.value = "unknown"; }
+  try {
+    notificationPermission.value = (await isPermissionGranted()) ? "granted" : "unknown";
+  } catch {
+    notificationPermission.value = "unknown";
+  }
 }
+
 async function testNotification() {
   let granted = await isPermissionGranted().catch(() => false);
   if (!granted) granted = (await requestPermission().catch(() => "denied")) === "granted";
   notificationPermission.value = granted ? "granted" : "unknown";
   if (granted) await invoke("send_test_notification").catch(() => undefined);
 }
+
+function getUpdateErrorStatus(error: unknown, phase: "check" | "install") {
+  const detail = String(error ?? "");
+  console.error(`update ${phase} failed`, error);
+
+  if (phase === "check") {
+    if (/404|not found|未找到/i.test(detail)) return "更新源暂不可用（尚未发布更新）";
+    if (/fetch|network|connect|网络/i.test(detail)) return "无法连接更新服务，请检查网络";
+    return "检查更新失败，请稍后重试";
+  }
+
+  if (/fetch|network|connect|网络/i.test(detail)) return "下载更新失败，请检查网络";
+  return "更新安装失败，请稍后重试";
+}
+
 async function checkForUpdates() {
   if (updateBusy.value) return;
-  updateBusy.value = true; updateStatus.value = "正在检查更新..."; updateProgress.value = 0;
+
+  updateBusy.value = true;
+  updateStatus.value = "正在检查更新...";
+  updateProgress.value = 0;
+  availableVersion.value = "";
+  updateNotes.value = "";
+  pendingUpdate = null;
+  showUpdateConfirmation.value = false;
+
   try {
     const update = await check();
-    if (!update) { updateStatus.value = `当前已是最新版本（v${currentVersion.value}）`; return; }
-    availableVersion.value = update.version; updateNotes.value = update.body || "暂无更新说明";
-    let downloaded = 0; let totalBytes = 0;
+    if (!update) {
+      updateStatus.value = `当前已是最新版本（v${currentVersion.value}）`;
+      return;
+    }
+
+    pendingUpdate = update;
+    availableVersion.value = update.version;
+    updateNotes.value = update.body || "暂无更新说明";
+    updateStatus.value = `发现新版本 v${update.version}`;
+    showUpdateConfirmation.value = true;
+  } catch (error) {
+    updateStatus.value = getUpdateErrorStatus(error, "check");
+  } finally {
+    updateBusy.value = false;
+  }
+}
+
+function postponeUpdate() {
+  if (updateBusy.value) return;
+  showUpdateConfirmation.value = false;
+  pendingUpdate = null;
+  updateStatus.value = `已暂不下载 v${availableVersion.value}`;
+}
+
+async function downloadAndInstallUpdate() {
+  const update = pendingUpdate;
+  if (updateBusy.value || !update) return;
+
+  updateBusy.value = true;
+  showUpdateConfirmation.value = false;
+  updateProgress.value = 0;
+
+  try {
+    let downloaded = 0;
+    let totalBytes = 0;
     await update.downloadAndInstall((event) => {
-      if (event.event === "Started") { downloaded = 0; totalBytes = event.data.contentLength || 0; updateStatus.value = `正在下载 v${update.version}...`; }
-      else if (event.event === "Progress") { downloaded += event.data.chunkLength; if (totalBytes) updateProgress.value = Math.min(100, Math.round(downloaded / totalBytes * 100)); }
-      else if (event.event === "Finished") { updateProgress.value = 100; updateStatus.value = "下载完成，正在重启安装..."; }
+      if (event.event === "Started") {
+        downloaded = 0;
+        totalBytes = event.data.contentLength || 0;
+        updateStatus.value = `正在下载 v${update.version}...`;
+      } else if (event.event === "Progress") {
+        downloaded += event.data.chunkLength;
+        if (totalBytes) updateProgress.value = Math.min(100, Math.round(downloaded / totalBytes * 100));
+      } else if (event.event === "Finished") {
+        updateProgress.value = 100;
+        updateStatus.value = "下载完成，正在重启安装...";
+      }
     });
+    pendingUpdate = null;
     await relaunch();
   } catch (error) {
-    // The updater error is otherwise hidden behind a generic message. In
-    // particular, a 404 means no signed latest.json has been published yet.
-    const detail = String(error ?? "");
-    console.error("update check failed", error);
-    if (/404|not found|未找到/i.test(detail)) {
-      updateStatus.value = "更新源暂不可用（尚未发布更新）";
-    } else if (/fetch|network|connect|网络/i.test(detail)) {
-      updateStatus.value = "无法连接更新服务，请检查网络";
-    } else {
-      updateStatus.value = "检查更新失败，请稍后重试";
-    }
+    pendingUpdate = null;
+    updateStatus.value = getUpdateErrorStatus(error, "install");
+  } finally {
+    updateBusy.value = false;
   }
-  finally { updateBusy.value = false; }
 }
-function close() { emit("close"); }
+
+function close() {
+  emit("close");
+}
+
 async function dragSettings(event: PointerEvent) {
   if ((event.target as HTMLElement).closest("button")) return;
   await windowApi.startDragging();
 }
+
 async function captureShortcut(field: keyof ShortcutConfig, event: KeyboardEvent) {
   event.preventDefault();
   if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
@@ -116,19 +209,29 @@ async function captureShortcut(field: keyof ShortcutConfig, event: KeyboardEvent
   await configStore.update({ general: { ...configStore.config.general, shortcuts: { ...configStore.config.general.shortcuts, [field]: parts.join("+") } } });
   recordingShortcut.value = null;
 }
+
 async function beginShortcutRecording(field: keyof ShortcutConfig) {
   recordingShortcut.value = field;
 }
+
 async function onShortcutKeydown(event: KeyboardEvent) {
   const field = recordingShortcut.value;
   if (!field) return;
-  if (event.key === "Escape") { event.preventDefault(); recordingShortcut.value = null; return; }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    recordingShortcut.value = null;
+    return;
+  }
   await captureShortcut(field, event);
 }
+
 onMounted(async () => {
-  await configStore.load(); currentVersion.value = await getVersion().catch(() => "0.0.2"); await loadSystemFonts(); await refreshNotificationPermission();
+  await configStore.load();
+  currentVersion.value = await getVersion().catch(() => "0.0.2");
+  await refreshNotificationPermission();
   window.addEventListener("keydown", onShortcutKeydown, true);
 });
+
 onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, true));
 </script>
 
@@ -139,7 +242,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
       <label class="settings-label">字体</label>
       <div class="font-picker" :class="{ open: fontPickerOpen }">
         <button class="font-picker-trigger" @click="fontPickerOpen = !fontPickerOpen" :style="{ fontFamily: configStore.config.general.fontFamily }"><span>{{ configStore.config.general.fontFamily }}</span><ChevronDown16 /></button>
-        <div v-if="fontPickerOpen" class="font-picker-menu"><input v-model="fontSearch" class="font-search" placeholder="搜索字体..." /><div class="font-options"><button v-for="font in filteredFonts" :key="font" class="font-option" :class="{ selected: font === configStore.config.general.fontFamily }" :style="{ fontFamily: font }" @click="setFontFamily(font)">{{ font }}</button></div></div>
+        <div v-if="fontPickerOpen" class="font-picker-menu">
+          <span v-if="fontLoading" class="font-loading">正在加载系统字体...</span>
+          <template v-else>
+            <input v-model="fontSearch" class="font-search" placeholder="搜索字体..." />
+            <div class="font-options"><button v-for="font in filteredFonts" :key="font" class="font-option" :class="{ selected: font === configStore.config.general.fontFamily }" :style="{ fontFamily: font }" @click="setFontFamily(font)">{{ font }}</button><span v-if="!filteredFonts.length" class="font-empty">未找到字体</span></div>
+          </template>
+        </div>
       </div>
       <label class="settings-label">背景透明度 {{ configStore.config.window.opacity }}%</label>
       <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @input="setOpacity(Number(($event.target as HTMLInputElement).value))" />
@@ -173,6 +282,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
       <div v-if="updateBusy && updateProgress > 0" class="update-progress"><span :style="{ width: `${updateProgress}%` }"></span></div>
       <span v-if="updateStatus" class="update-status">{{ updateStatus }}</span>
     </section>
+
+    <div v-if="showUpdateConfirmation" class="update-dialog-backdrop">
+      <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-confirmation-title">
+        <strong id="update-confirmation-title">发现新版本 v{{ availableVersion }}</strong>
+        <p>确认后将下载更新，并在重启应用时开始安装。</p>
+        <div class="update-confirm-notes">{{ updateNotes }}</div>
+        <div class="update-dialog-actions">
+          <button class="update-dialog-cancel" @click="postponeUpdate">稍后再说</button>
+          <button class="update-dialog-confirm" @click="downloadAndInstallUpdate">立即下载并安装</button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -202,10 +323,22 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
 .font-options { max-height:130px; overflow:auto; }
 .font-option { display:block; width:100%; padding:5px; text-align:left; color:var(--text); font-size:11px; }
 .font-option:hover,.font-option.selected { background:var(--bg-soft); }
+.font-loading,.font-empty { display:block; padding:6px; color:var(--text-soft); font-size:11px; }
 .settings-check { display:flex; align-items:center; gap:6px; margin-top:12px; }
 .version-label { margin-top:14px; color:var(--text-soft); font-size:10px; }
 .update-btn { width:100%; margin-top:8px; padding:6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
-.update-release { margin-top:6px; font-size:11px; }.update-notes { margin-top:3px; white-space:pre-wrap; max-height:80px; overflow:auto; color:var(--text-soft); font-size:10px; }
-.update-progress { height:3px; margin-top:6px; background:var(--border); }.update-progress span { display:block; height:100%; background:var(--accent); }
+.update-release { margin-top:6px; font-size:11px; }
+.update-notes { margin-top:3px; white-space:pre-wrap; max-height:80px; overflow:auto; color:var(--text-soft); font-size:10px; }
+.update-progress { height:3px; margin-top:6px; background:var(--border); }
+.update-progress span { display:block; height:100%; background:var(--accent); }
 .update-status { display:block; margin-top:6px; color:var(--text-soft); font-size:10px; }
+.update-dialog-backdrop { position:absolute; z-index:30; inset:0; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(0,0,0,.28); }
+.update-dialog { width:min(292px, 100%); max-height:100%; overflow:auto; box-sizing:border-box; padding:14px; border:1px solid var(--border); border-radius:6px; background:var(--bg); box-shadow:0 10px 28px rgba(0,0,0,.24); }
+.update-dialog strong { display:block; font-size:13px; }
+.update-dialog p { margin:8px 0; color:var(--text-soft); font-size:11px; line-height:1.5; }
+.update-confirm-notes { max-height:92px; overflow:auto; padding:7px; border-radius:4px; background:var(--bg-soft); color:var(--text-soft); font-size:10px; line-height:1.45; white-space:pre-wrap; }
+.update-dialog-actions { display:flex; gap:8px; margin-top:12px; }
+.update-dialog-actions button { flex:1; padding:6px 8px; border:1px solid var(--border); border-radius:4px; font-size:11px; }
+.update-dialog-cancel { background:var(--bg-soft); color:var(--text); }
+.update-dialog-confirm { border-color:var(--accent) !important; background:var(--accent); color:#fff; }
 </style>

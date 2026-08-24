@@ -253,11 +253,20 @@ fn hide_window(app: AppHandle, label: String) {
 fn list_system_fonts() -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let script = "$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts','HKCU:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts' | ForEach-Object { $_.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object { ($_.Name -replace ' \\(TrueType\\)| \\(OpenType\\)| \\(All res\\)$','').Trim() } } | Sort-Object -Unique";
-        if let Ok(output) = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output()
-        {
+        let mut command = std::process::Command::new("powershell.exe");
+        command.creation_flags(CREATE_NO_WINDOW).args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ]);
+
+        if let Ok(output) = command.output() {
             let mut fonts: Vec<String> = String::from_utf8_lossy(&output.stdout)
                 .lines()
                 .map(str::trim)

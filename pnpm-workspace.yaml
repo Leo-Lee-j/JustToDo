@@ -1,0 +1,9 @@
+# pnpm 11 requires an explicit build-script decision for each listed dependency.
+# esbuild installs its platform binary; vue-demi configures Vue compatibility.
+# Carbon packages only run optional IBM telemetry after installation.
+allowBuilds:
+  '@carbon/icon-helpers': false
+  '@carbon/icons': false
+  '@carbon/icons-vue': false
+  esbuild: true
+  vue-demi: true
