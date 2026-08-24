@@ -86,9 +86,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $assetUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/latest.json"
-          try {
-            $response = Invoke-WebRequest -Uri $assetUrl -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } -UseBasicParsing -TimeoutSec 30
-            if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
-          } catch {
-            throw "latest.json was not published at ${assetUrl}: $($_.Exception.Message)"
+          $maxAttempts = 12
+          $retryDelaySeconds = 10
+          $lastError = $null
+          $metadataPublished = $false
+
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              $response = Invoke-WebRequest `
+                -Uri $assetUrl `
+                -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } `
+                -UseBasicParsing `
+                -TimeoutSec 30 `
+                -ErrorAction Stop
+
+              if ($response.StatusCode -eq 200) {
+                Write-Host "latest.json is available (attempt $attempt of $maxAttempts)."
+                $metadataPublished = $true
+                break
+              }
+
+              $lastError = "HTTP $($response.StatusCode)"
+            } catch {
+              $lastError = $_.Exception.Message
+            }
+
+            if ($attempt -lt $maxAttempts) {
+              Write-Host "latest.json is not available yet (attempt $attempt of $maxAttempts): $lastError Retrying in $retryDelaySeconds seconds."
+              Start-Sleep -Seconds $retryDelaySeconds
+            }
+          }
+
+          if (-not $metadataPublished) {
+            throw "latest.json was not published at ${assetUrl} after $maxAttempts attempts: $lastError"
           }
