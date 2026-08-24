@@ -76,7 +76,8 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: true
+          # Tauri action uses this supported input to publish latest.json.
+          uploadUpdaterJson: true
           args: ${{ matrix.args }}
 
       - name: Verify updater metadata was published
