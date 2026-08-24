@@ -85,7 +85,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/latest.json"
+          $releaseApiUrl = "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}"
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+          }
           $maxAttempts = 12
           $retryDelaySeconds = 10
           $lastError = $null
@@ -93,30 +97,40 @@ jobs:
 
           for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
             try {
-              $response = Invoke-WebRequest `
-                -Uri $assetUrl `
-                -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } `
-                -UseBasicParsing `
+              $release = Invoke-RestMethod `
+                -Method Get `
+                -Uri $releaseApiUrl `
+                -Headers $headers `
                 -TimeoutSec 30 `
                 -ErrorAction Stop
 
-              if ($response.StatusCode -eq 200) {
-                Write-Host "latest.json is available (attempt $attempt of $maxAttempts)."
+              $metadata = @($release.assets | Where-Object {
+                $_.name -eq 'latest.json' -and $_.state -eq 'uploaded' -and $_.size -gt 0
+              }) | Select-Object -First 1
+
+              if ($null -ne $metadata) {
+                Write-Host "Verified uploaded latest.json via the Release API (attempt $attempt of $maxAttempts, $($metadata.size) bytes)."
                 $metadataPublished = $true
                 break
               }
 
-              $lastError = "HTTP $($response.StatusCode)"
+              $availableAssets = @($release.assets | ForEach-Object {
+                "$($_.name) (state=$($_.state), size=$($_.size))"
+              }) -join ', '
+              if ([string]::IsNullOrWhiteSpace($availableAssets)) {
+                $availableAssets = '(none)'
+              }
+              $lastError = "Release was found, but no uploaded, non-empty latest.json asset is available. Assets: $availableAssets"
             } catch {
               $lastError = $_.Exception.Message
             }
 
             if ($attempt -lt $maxAttempts) {
-              Write-Host "latest.json is not available yet (attempt $attempt of $maxAttempts): $lastError Retrying in $retryDelaySeconds seconds."
+              Write-Host "latest.json is not available through the Release API yet (attempt $attempt of $maxAttempts): $lastError Retrying in $retryDelaySeconds seconds."
               Start-Sleep -Seconds $retryDelaySeconds
             }
           }
 
           if (-not $metadataPublished) {
-            throw "latest.json was not published at ${assetUrl} after $maxAttempts attempts: $lastError"
+            throw "latest.json was not published for ${{ github.ref_name }} after $maxAttempts API checks: $lastError"
           }
