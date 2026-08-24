@@ -2,6 +2,7 @@
 name = "justtodo"
 version = "0.0.6"
 description = "桌面盯人 TODO 软件"
+license = "MIT"
 authors = ["JustToDo"]
 edition = "2021"
 rust-version = "1.77"

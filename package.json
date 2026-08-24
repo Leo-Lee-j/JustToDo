@@ -2,6 +2,7 @@
   "name": "justtodo",
   "version": "0.0.6",
   "description": "桌面盯人 TODO 软件 - 常驻桌面、双形态看板",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
