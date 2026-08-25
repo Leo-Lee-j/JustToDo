@@ -196,6 +196,24 @@ fn set_win_opacity(w: &tauri::webview::WebviewWindow, alpha: f64) -> Result<(), 
     Ok(())
 }
 
+// Keep the main note as a normal non-topmost window (rather than a
+// WS_EX_TOOLWINDOW). The Shell API removes only its taskbar button.
+#[cfg(target_os = "windows")]
+fn remove_taskbar_button(w: &tauri::webview::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+
+    let hwnd = w.hwnd().map_err(|e| e.to_string())?;
+    let hwnd = HWND(hwnd.0 as _);
+    unsafe {
+        let taskbar: ITaskbarList = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| e.to_string())?;
+        taskbar.HrInit().map_err(|e| e.to_string())?;
+        taskbar.DeleteTab(hwnd).map_err(|e| e.to_string())
+    }
+}
+
 fn sync_taskbar_window(app: &AppHandle, store: &Store) -> Result<bool, String> {
     let config = store.config();
     let Some(win) = app.get_webview_window("taskbar") else {
@@ -341,6 +359,9 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 {
                     let _ = set_win_opacity(&w, cfg.window.opacity as f64 / 100.0);
+                    // Best effort here; the focused event below retries after the
+                    // Shell has registered the visible top-level window.
+                    let _ = remove_taskbar_button(&w);
                 }
             } else {
                 diag("!! sticky window NOT found after launch");
@@ -377,6 +398,16 @@ pub fn run() {
                 let _ = check_due_notifications(&scheduler_app, &scheduler_app.state::<Store>());
             });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "windows")]
+            if window.label() == "sticky" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                // Reapply after startup and after tray-based restoration without
+                // showing, focusing, or changing the note's z-order.
+                if let Some(sticky) = window.app_handle().get_webview_window("sticky") {
+                    let _ = remove_taskbar_button(&sticky);
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_tasks,
