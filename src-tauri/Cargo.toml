@@ -1,6 +1,6 @@
 [package]
 name = "justtodo"
-version = "0.0.6"
+version = "0.0.7"
 description = "桌面盯人 TODO 软件"
 license = "MIT"
 authors = ["JustToDo"]
