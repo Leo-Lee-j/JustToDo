@@ -19,17 +19,21 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Verify frontend
-        run: npm run build
+        run: pnpm run build
       - name: Verify backend
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
@@ -76,8 +80,10 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
-          # Tauri action uses this supported input to publish latest.json.
-          uploadUpdaterJson: true
+          # tauri-action@v0 publishes latest.json with this input.
+          includeUpdaterJson: true
+          # Use the same pinned package manager configured above.
+          tauriScript: pnpm tauri
           args: ${{ matrix.args }}
 
       - name: Verify updater metadata was published
