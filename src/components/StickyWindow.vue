@@ -56,6 +56,8 @@ const taskListEl = ref<HTMLElement | null>(null);
 const systemFonts = ref<string[]>([]);
 const fontSearch = ref("");
 const fontPickerOpen = ref(false);
+const multiSelectMode = ref(false);
+const selectedTaskIds = ref<Set<string>>(new Set());
 
 const tabs = computed(() => tabStore.sortedTabs);
 const filteredFonts = computed(() => {
@@ -248,6 +250,48 @@ async function setLaunchOnStartup(enabled: boolean) {
   }
 }
 
+function enterMultiSelectMode(taskId?: string) {
+  multiSelectMode.value = true;
+  selectedTaskIds.value.clear();
+  if (taskId) selectedTaskIds.value.add(taskId);
+}
+
+function exitMultiSelectMode() {
+  multiSelectMode.value = false;
+  selectedTaskIds.value.clear();
+}
+
+function toggleTaskSelection(taskId: string) {
+  if (selectedTaskIds.value.has(taskId)) {
+    selectedTaskIds.value.delete(taskId);
+  } else {
+    selectedTaskIds.value.add(taskId);
+  }
+}
+
+function selectAll() {
+  selectedTaskIds.value.clear();
+  for (const task of taskStore.activeTasks) {
+    selectedTaskIds.value.add(task.id);
+  }
+}
+
+async function batchComplete() {
+  const ids = Array.from(selectedTaskIds.value);
+  for (const id of ids) {
+    await taskStore.setStatus(id, "done");
+  }
+  exitMultiSelectMode();
+}
+
+async function batchDelete() {
+  const ids = Array.from(selectedTaskIds.value);
+  for (const id of ids) {
+    await taskStore.softDelete(id);
+  }
+  exitMultiSelectMode();
+}
+
 async function checkForUpdates() {
   if (updateBusy.value) return;
   updateBusy.value = true;
@@ -366,6 +410,11 @@ onMounted(async () => {
       switchTab: (index) => {
         const tab = tabs.value[index - 1];
         if (tab) void switchTab(tab.id);
+      },
+      escape: () => {
+        if (showSettings.value) showSettings.value = false;
+        else if (showNewTab.value) showNewTab.value = false;
+        else if (showComposerNotes.value) showComposerNotes.value = false;
       },
     }, configStore.config.general.shortcuts);
   };
@@ -495,21 +544,48 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
     </nav>
 
     <!-- 任务列表 -->
-    <div v-if="!showHistory" ref="taskListEl" class="list">
+    <div v-if="!showHistory" ref="taskListEl" class="list" :class="{ 'multi-select-mode': multiSelectMode }">
+      <div v-if="multiSelectMode" class="multi-select-header">
+        <span class="multi-select-count">已选择 {{ selectedTaskIds.size }} 项</span>
+        <div class="multi-select-actions">
+          <button class="multi-select-btn" @click="selectAll" title="全选">全选</button>
+          <button class="multi-select-btn complete-btn" @click="batchComplete" :disabled="selectedTaskIds.size === 0" title="批量完成">完成</button>
+          <button class="multi-select-btn delete-btn" @click="batchDelete" :disabled="selectedTaskIds.size === 0" title="批量删除">删除</button>
+          <button class="multi-select-btn cancel-btn" @click="exitMultiSelectMode" title="退出">退出</button>
+        </div>
+      </div>
       <draggable
         v-model="taskStore.activeTasks"
         item-key="id"
         handle=".drag-handle"
         :animation="150"
+        :disabled="multiSelectMode"
         :class="{ dragging: drag }"
         @start="drag = true"
         @end="drag = false; onReorder()"
       >
         <template #item="{ element }">
-          <TaskItem :task="element" />
+          <div
+            class="task-item-wrapper"
+            :class="{ selected: selectedTaskIds.has(element.id) }"
+            @click="multiSelectMode ? toggleTaskSelection(element.id) : undefined"
+          >
+            <div v-if="multiSelectMode" class="task-checkbox">
+              <input
+                type="checkbox"
+                :checked="selectedTaskIds.has(element.id)"
+                @click.stop="toggleTaskSelection(element.id)"
+              />
+            </div>
+            <TaskItem :task="element" :multiSelectMode="multiSelectMode" @long-press="enterMultiSelectMode(element.id)" />
+          </div>
         </template>
       </draggable>
-      <div v-if="!taskStore.activeTasks.length" class="empty">暂无任务，回车添加一个吧 ✨</div>
+      <div v-if="!taskStore.activeTasks.length" class="empty">
+        <div class="empty-icon">✨</div>
+        <div class="empty-title">暂无任务</div>
+        <div class="empty-hint">按回车键添加第一个任务</div>
+      </div>
     </div>
 
     <!-- 输入栏 -->
@@ -751,11 +827,114 @@ function closeComposerNotesOnOutside(event: PointerEvent) {
 .list :deep(.task) { cursor: grab; }
 .list.dragging, .list.dragging :deep(.task) { cursor: grabbing !important; }
 .list::-webkit-scrollbar { display: none; }
+.multi-select-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+.multi-select-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.multi-select-actions {
+  display: flex;
+  gap: 6px;
+}
+.multi-select-btn {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.multi-select-btn:hover:not(:disabled) {
+  background: var(--bg-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.multi-select-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.multi-select-btn.complete-btn:hover:not(:disabled) {
+  background: #d7f0dc;
+  border-color: #4caf50;
+  color: #2e7d32;
+}
+.multi-select-btn.delete-btn:hover:not(:disabled) {
+  background: #fdecea;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.multi-select-btn.cancel-btn {
+  background: var(--text-soft);
+  color: #fff;
+  border-color: var(--text-soft);
+}
+.multi-select-btn.cancel-btn:hover {
+  background: var(--text);
+  border-color: var(--text);
+}
+.task-item-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.task-item-wrapper > :not(.task-checkbox) {
+  flex: 1;
+  min-width: 0;
+}
+.task-item-wrapper.selected {
+  background: rgba(59, 109, 255, 0.08);
+}
+.task-checkbox {
+  flex-shrink: 0;
+  padding-left: 10px;
+}
+.task-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+.multi-select-mode .task-item-wrapper {
+  cursor: pointer;
+}
 .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   color: var(--text-soft);
-  padding: 40px 16px;
+  padding: 60px 16px;
+  gap: 8px;
+}
+.empty-icon {
+  font-size: 48px;
+  line-height: 1;
+  margin-bottom: 8px;
+  opacity: 0.6;
+}
+.empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.empty-hint {
   font-size: 12px;
+  color: var(--text-soft);
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: var(--bg-soft);
 }
 .input-bar {
   display: flex;

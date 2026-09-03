@@ -95,6 +95,7 @@ export interface GeneralConfig {
   singleInstance: boolean;
   fontFamily: string;
   shortcuts: ShortcutConfig;
+  taskCompletionMode: "checkbox" | "gesture" | "both";
 }
 
 export interface ShortcutConfig {

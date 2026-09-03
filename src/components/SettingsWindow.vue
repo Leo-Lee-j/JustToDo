@@ -87,6 +87,10 @@ async function setSoundEnabled(enabled: boolean) {
   await configStore.update({ notification: { ...configStore.config.notification, soundEnabled: enabled } });
 }
 
+async function setTaskCompletionMode(mode: "checkbox" | "gesture" | "both") {
+  await configStore.update({ general: { ...configStore.config.general, taskCompletionMode: mode } });
+}
+
 async function syncTaskbar(patch: Partial<typeof configStore.config.taskbar>) {
   await configStore.update({ taskbar: { ...configStore.config.taskbar, ...patch } });
   await invoke("sync_taskbar");
@@ -252,6 +256,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
       </div>
       <label class="settings-label">背景透明度 {{ configStore.config.window.opacity }}%</label>
       <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @input="setOpacity(Number(($event.target as HTMLInputElement).value))" />
+      <label class="settings-label">任务完成方式</label>
+      <select class="taskbar-select" :value="configStore.config.general.taskCompletionMode" @change="setTaskCompletionMode(($event.target as HTMLSelectElement).value as 'checkbox' | 'gesture' | 'both')">
+        <option value="checkbox">仅复选框</option>
+        <option value="gesture">仅手势</option>
+        <option value="both">复选框 + 手势</option>
+      </select>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.general.launchOnStartup" @change="setLaunchOnStartup(($event.target as HTMLInputElement).checked)" /> 开机自启动</label>
       <label class="settings-label">快捷键</label>
       <div class="shortcut-list">

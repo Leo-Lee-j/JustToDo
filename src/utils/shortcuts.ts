@@ -8,6 +8,9 @@ export interface ShortcutHandlers {
   newTab?: () => void;
   search?: () => void;
   switchTab?: (n: number) => void;
+  complete?: () => void;
+  delete?: () => void;
+  escape?: () => void;
 }
 
 function eventKey(e: KeyboardEvent): string {
@@ -28,19 +31,56 @@ function matches(e: KeyboardEvent, binding: string): boolean {
 export function installWindowShortcuts(handlers: ShortcutHandlers, bindings?: ShortcutConfig): () => void {
   const keys = bindings ?? { newTask: "Ctrl+N", newTab: "Ctrl+Shift+T", search: "Ctrl+F" };
   const onKey = (e: KeyboardEvent) => {
+    // 新建任务
     if (matches(e, keys.newTask)) {
       if (!handlers.newTask) return;
       e.preventDefault();
       handlers.newTask?.();
-    } else if (matches(e, keys.newTab)) {
+    }
+    // 新建标签页
+    else if (matches(e, keys.newTab)) {
       if (!handlers.newTab) return;
       e.preventDefault();
       handlers.newTab?.();
-    } else if (matches(e, keys.search)) {
+    }
+    // 搜索
+    else if (matches(e, keys.search)) {
       if (!handlers.search) return;
       e.preventDefault();
       handlers.search?.();
     }
+    // 完成任务 (Space)
+    else if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+      const target = e.target as HTMLElement;
+      // 只在非输入元素且非按钮上触发
+      if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA" && target.tagName !== "BUTTON") {
+        if (!handlers.complete) return;
+        e.preventDefault();
+        handlers.complete?.();
+      }
+    }
+    // 删除任务 (Ctrl+D 或 Delete)
+    else if ((e.ctrlKey || e.metaKey) && e.key === "d" && !e.shiftKey && !e.altKey) {
+      if (!handlers.delete) return;
+      e.preventDefault();
+      handlers.delete?.();
+    }
+    else if (e.key === "Delete" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+      const target = e.target as HTMLElement;
+      if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") {
+        if (!handlers.delete) return;
+        e.preventDefault();
+        handlers.delete?.();
+      }
+    }
+    // 取消/关闭 (Esc)
+    else if (e.key === "Escape") {
+      if (!handlers.escape) return;
+      e.preventDefault();
+      handlers.escape?.();
+    }
+
+    // 切换标签页 (Ctrl+1-9)
     if (handlers.switchTab && (e.ctrlKey || e.metaKey) && !e.shiftKey && /^[1-9]$/.test(e.key)) {
       e.preventDefault();
       handlers.switchTab(parseInt(e.key, 10));

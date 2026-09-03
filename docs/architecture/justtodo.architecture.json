@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "JustToDo 应用架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Leo-Lee-j/JustToDo",
+      "revision": "0ab1f072bcce2b913b92eef94bce4fbdeb3d3aad"
+    },
+    "views": [
+      { "id": "main-path", "label": "主数据通路", "focus": ["user", "frontend", "stores", "ipc", "store", "data"], "note": "用户操作经 Vue 窗口、Pinia Store、Tauri 命令到本地 JSON 的主链路。" },
+      { "id": "reminder", "label": "到期提醒", "focus": ["ipc", "notify", "store", "os"], "note": "每小时调度线程读取到期任务并发系统通知。" },
+      { "id": "system-integration", "label": "系统集成", "focus": ["frontend", "updater", "ipc", "os"], "note": "自动更新与 Windows Win32 窗口控制集成。" }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "桌面交互",
+      "pos": [40, 200],
+      "size": [120, 64],
+      "tag": "单一实例"
+    },
+    {
+      "id": "frontend",
+      "type": "frontend",
+      "label": "Vue 3 前端",
+      "sublabel": "四形态窗口",
+      "tag": "hash 路由",
+      "sources": [
+        { "path": "src/App.vue", "label": "路由分发" },
+        { "path": "src/components/StickyWindow.vue", "label": "钉住窗口" }
+      ],
+      "pos": [230, 196],
+      "size": [170, 72]
+    },
+    {
+      "id": "stores",
+      "type": "frontend",
+      "label": "Pinia Stores",
+      "sublabel": "task / tab / config",
+      "tag": "事件订阅同步",
+      "sources": [
+        { "path": "src/stores/taskStore.ts", "label": "任务状态" }
+      ],
+      "pos": [470, 196],
+      "size": [160, 72]
+    },
+    {
+      "id": "ipc",
+      "type": "backend",
+      "label": "Tauri 命令",
+      "sublabel": "commands.rs · lib.rs",
+      "tag": "CRUD + 乐观锁",
+      "sources": [
+        { "path": "src-tauri/src/commands.rs", "label": "任务/Tab 命令" },
+        { "path": "src-tauri/src/lib.rs", "label": "窗口控制命令" }
+      ],
+      "pos": [710, 196],
+      "size": [160, 72]
+    },
+    {
+      "id": "store",
+      "type": "backend",
+      "label": "Store",
+      "sublabel": "Mutex 内存缓存",
+      "tag": "单一数据源",
+      "sources": [
+        { "path": "src-tauri/src/storage.rs", "label": "存储层" }
+      ],
+      "pos": [950, 196],
+      "size": [150, 72]
+    },
+    {
+      "id": "data",
+      "type": "database",
+      "label": "本地文件",
+      "sublabel": "本地 JSON",
+      "tag": "data · config",
+      "sources": [
+        { "path": "src-tauri/src/storage.rs", "label": "data.json · config.json" }
+      ],
+      "pos": [1170, 196],
+      "size": [110, 72]
+    },
+    {
+      "id": "updater",
+      "type": "cloud",
+      "label": "GitHub Releases",
+      "sublabel": "自动更新源",
+      "sources": [
+        { "path": "src-tauri/tauri.conf.json", "label": "updater endpoint" }
+      ],
+      "pos": [230, 440],
+      "size": [170, 68]
+    },
+    {
+      "id": "os",
+      "type": "external",
+      "label": "Windows 系统",
+      "sublabel": "Win32 · 通知 API",
+      "tag": "任务栏/透明度",
+      "sources": [
+        { "path": "src-tauri/src/taskbar.rs", "label": "任务栏定位" },
+        { "path": "src-tauri/src/lib.rs", "label": "窗口透明度" }
+      ],
+      "pos": [470, 440],
+      "size": [160, 68]
+    },
+    {
+      "id": "notify",
+      "type": "backend",
+      "label": "到期提醒",
+      "sublabel": "每小时调度线程",
+      "tag": "reminder_hours 窗口",
+      "sources": [
+        { "path": "src-tauri/src/lib.rs", "label": "check_due_notifications" }
+      ],
+      "pos": [710, 440],
+      "size": [160, 68]
+    },
+    {
+      "id": "backup",
+      "type": "database",
+      "label": "备份目录",
+      "sublabel": "backup/ · 30 天回收站",
+      "pos": [950, 440],
+      "size": [150, 68]
+    }
+  ],
+  "connections": [
+    { "id": "user-frontend", "from": "user", "to": "frontend", "label": "交互", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "frontend-stores", "from": "frontend", "to": "stores", "label": "调用 action", "fromSide": "right", "toSide": "left" },
+    { "id": "stores-ipc", "from": "stores", "to": "ipc", "label": "invoke() · 事件广播", "fromSide": "right", "toSide": "left", "labelDy": 60 },
+    { "id": "ipc-store", "from": "ipc", "to": "store", "label": "读写数据", "fromSide": "right", "toSide": "left" },
+    { "id": "store-data", "from": "store", "to": "data", "label": "JSON 落盘", "fromSide": "right", "toSide": "left" },
+    { "id": "store-backup", "from": "store", "to": "backup", "label": "删除前/每日备份", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "frontend-updater", "from": "frontend", "to": "updater", "label": "检查更新", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "ipc-notify", "from": "ipc", "to": "notify", "label": "每小时调度", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 130 },
+    { "id": "notify-store", "from": "notify", "to": "store", "label": "读取到期任务", "fromSide": "right", "toSide": "left" },
+    { "id": "notify-os", "from": "notify", "to": "os", "label": "系统通知", "fromSide": "left", "toSide": "right" },
+    { "id": "ipc-os", "from": "ipc", "to": "os", "label": "Win32 透明度/任务栏", "fromSide": "bottom", "toSide": "top" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "前端 · 渲染层", "items": ["Vue 3 + Pinia 单页，hash 路由分发四个窗口", "窗口内快捷键 (Ctrl+N 新建 / Ctrl+F 搜索)", "订阅 task:* 事件保持多窗口状态同步"] },
+    { "dot": "emerald", "title": "后端 · Tauri 核心", "items": ["命令层负责任务/Tab/分类 CRUD 与事件广播", "update_task 以 updatedAt 乐观锁拒绝冲突", "Store 用 parking_lot Mutex 缓存并落盘 JSON"] },
+    { "dot": "violet", "title": "数据 · 持久化", "items": ["data.json / config.json 为本地单一数据源", "删除前与每日备份写入 backup/，回收站 30 天清理", "SingleInstance 文件锁保证只运行一个实例"] },
+    { "dot": "amber", "title": "系统集成 · 平台", "items": ["Windows Win32 实现窗口透明度与任务栏定位", "tauri-plugin-notification 推送到期提醒", "tauri-plugin-updater 对接 GitHub Releases 自动更新"] }
+  ]
+}

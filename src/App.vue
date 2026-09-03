@@ -4,6 +4,7 @@ import StickyWindow from "./components/StickyWindow.vue";
 import TaskbarPinned from "./components/TaskbarPinned.vue";
 import PopupList from "./components/PopupList.vue";
 import TrashView from "./components/TrashView.vue";
+import ToastManager from "./components/ToastManager.vue";
 import { useConfigStore } from "./stores/configStore";
 
 function getRoute() {
@@ -35,4 +36,5 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
   <TaskbarPinned v-else-if="route === 'taskbar'" />
   <PopupList v-else-if="route === 'popup'" />
   <TrashView v-else-if="route === 'trash'" />
+  <ToastManager />
 </template>
