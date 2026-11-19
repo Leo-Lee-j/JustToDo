@@ -6,6 +6,7 @@ export interface ShortcutHandlers {
   search?: () => void;
   showWindow?: () => void;
   switchTab?: (n: number) => void;
+  escape?: () => void;
 }
 
 export function eventKey(e: KeyboardEvent): string {
@@ -40,6 +41,7 @@ export function installWindowShortcuts(handlers: ShortcutHandlers, bindings: Sho
       e.preventDefault();
       handlers.switchTab(parseInt(e.key, 10));
     }
+    if (key === "escape") handlers.escape?.();
   };
   window.addEventListener("keydown", onKey);
   return () => window.removeEventListener("keydown", onKey);

@@ -12,15 +12,12 @@
 - 字体、透明度、开机自启、快捷键与系统托盘设置
 - 便签自动收起，悬停或点击展开
 - 本地 JSON 数据存储，无需账号或云端服务
-- 已签名的应用内更新
 
 功能完成情况、验证范围与待完善项目见 [功能评估与修复记录](docs/FEATURE-ASSESSMENT.md)。
 
 ## 下载与更新
 
 前往 [Releases](https://github.com/Leo-Lee-j/JustToDo/releases) 下载 Windows 安装包。安装后可在设置中选择“检查更新”。
-
-自动更新需要公开可访问的 `latest.json`、安装包和签名文件，因此更新 Release 必须保持公开。
 
 ## 本地开发
 

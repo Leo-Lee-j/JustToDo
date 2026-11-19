@@ -11,6 +11,7 @@ const DEFAULT_CONFIG: Config = {
   general: {
     launchOnStartup: false, singleInstance: true, fontFamily: "Microsoft YaHei",
     shortcuts: { newTask: "Ctrl+N", newTab: "Ctrl+Shift+T", search: "Ctrl+F", showWindow: "Ctrl+Shift+Space" },
+    taskCompletionMode: "both",
   },
   theme: "light",
   version: "",

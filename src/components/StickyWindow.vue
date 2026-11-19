@@ -20,7 +20,6 @@ import type { Tab, Task } from "@/types";
 import TaskItem from "./TaskItem.vue";
 import SettingsWindow from "./SettingsWindow.vue";
 import TrashView from "./TrashView.vue";
-import UndoDelete from "./UndoDelete.vue";
 import { installWindowShortcuts } from "@/utils/shortcuts";
 
 const taskStore = useTaskStore();
@@ -49,6 +48,9 @@ const ordering = ref(false);
 const draggingTab = ref<string>();
 const collapsed = ref(false);
 const changingSize = ref(false);
+const selecting = ref(false);
+const selected = ref(new Set<string>());
+const batchBusy = ref(false);
 const pendingCount = computed(() => taskStore.tasks.filter((task) => !task.deletedAt && (task.status === "todo" || task.status === "doing")).length);
 const activeTasks = computed(() => taskStore.tasks.filter((task) => !task.deletedAt && task.tabId === tabStore.activeTabId).sort((a, b) => a.order - b.order));
 const searchResults = computed(() => {
@@ -139,10 +141,41 @@ watch([() => configStore.config.window.autoHide, showSettings], ([enabled, setti
 
 function switchTab(id: string) {
   showTasks();
+  exitSelection();
   search.value = "";
   confirmDeleteTabId.value = undefined;
   tabStore.setActive(id);
 }
+
+function exitSelection() {
+  selecting.value = false;
+  selected.value.clear();
+}
+
+function selectTask(id: string) {
+  if (batchBusy.value) return;
+  if (selected.value.has(id)) selected.value.delete(id);
+  else selected.value.add(id);
+}
+
+function startSelection(id: string) {
+  selected.value = new Set([id]);
+  selecting.value = true;
+}
+
+async function applySelection(action: "complete" | "delete") {
+  if (batchBusy.value) return;
+  batchBusy.value = true;
+  const ids = searchResults.value.filter(({ id }) => selected.value.has(id)).map(({ id }) => id);
+  await perform(async () => {
+    if (action === "delete") await taskStore.softDeleteMany(ids);
+    else for (const id of ids) await taskStore.setStatus(id, "done");
+    exitSelection();
+  });
+  batchBusy.value = false;
+}
+
+watch([search, view, showSettings, () => tabStore.activeTabId], exitSelection);
 
 async function focusSearch() {
   showTasks();
@@ -276,6 +309,12 @@ watch(() => configStore.config.general.shortcuts, (bindings, _, onCleanup) => {
       const tab = tabStore.sortedTabs[index - 1];
       if (tab) switchTab(tab.id);
     },
+    escape: () => {
+      if (selecting.value) exitSelection();
+      else if (showSettings.value) showSettings.value = false;
+      else if (tabEditor.value) tabEditor.value = undefined;
+      else if (showComposerNotes.value) showComposerNotes.value = false;
+    },
   }, bindings));
 }, { immediate: true });
 
@@ -346,16 +385,22 @@ onBeforeUnmount(() => {
         <button type="button" aria-label="关闭搜索" @click="showSearch = false; search = ''"><Close16 /></button>
       </div>
       <div ref="taskListEl" class="list">
-        <template v-if="search.trim()">
-          <TaskItem v-for="task in searchResults" :key="task.id" :task="task" />
-          <div v-if="!searchResults.length" class="empty">无匹配任务</div>
-        </template>
-        <template v-else>
-          <draggable :model-value="activeTasks" item-key="id" handle=".drag-handle" :animation="150" :disabled="ordering" @start="draggingTab = tabStore.activeTabId" @end="draggingTab = undefined" @update:model-value="reorder">
-            <template #item="{ element }"><TaskItem :task="element" sortable /></template>
-          </draggable>
-          <div v-if="!activeTasks.length" class="empty">暂无任务，输入标题后回车添加</div>
-        </template>
+        <div v-if="selecting" class="selection-bar">
+          <span>已选 {{ selected.size }} 项</span>
+          <button type="button" :disabled="batchBusy" @click="selected = new Set(searchResults.map(task => task.id))">全选</button>
+          <button type="button" :disabled="batchBusy || !selected.size" @click="applySelection('complete')">完成</button>
+          <button type="button" :disabled="batchBusy || !selected.size" @click="applySelection('delete')">删除</button>
+          <button type="button" :disabled="batchBusy" @click="exitSelection">退出</button>
+        </div>
+        <draggable :model-value="searchResults" item-key="id" handle=".drag-handle" :animation="150" :disabled="ordering || selecting || !!search.trim()" @start="draggingTab = tabStore.activeTabId" @end="draggingTab = undefined" @update:model-value="reorder">
+          <template #item="{ element }">
+            <div class="task-row" @click="selecting && selectTask(element.id)">
+              <input v-if="selecting" type="checkbox" :checked="selected.has(element.id)" :aria-label="'选择 ' + element.title" @click.stop="selectTask(element.id)" />
+              <TaskItem :task="element" :sortable="!search.trim()" :selecting="selecting" @long-press="startSelection(element.id)" />
+            </div>
+          </template>
+        </draggable>
+        <div v-if="!searchResults.length" class="empty">{{ search.trim() ? '无匹配任务' : '暂无任务，输入标题后回车添加' }}</div>
       </div>
       <form class="input-bar" @submit.prevent="addTask">
         <div v-if="showComposerNotes" class="composer-notes-wrap"><textarea v-model="newNotes" maxlength="255" placeholder="添加备注" aria-label="添加备注" @keydown.ctrl.enter.prevent="addTask" /></div>
@@ -368,7 +413,6 @@ onBeforeUnmount(() => {
         </div>
       </form>
     </template>
-    <UndoDelete />
     </div>
   </div>
 </template>
@@ -519,6 +563,13 @@ onBeforeUnmount(() => {
   scrollbar-width: none;
 }
 .list::-webkit-scrollbar { display: none; }
+.selection-bar { display:flex; align-items:center; gap:6px; padding:6px 10px; font-size:12px; background:var(--bg-soft); }
+.selection-bar span { margin-right:auto; }
+.selection-bar button { padding:4px 6px; border:1px solid var(--border); border-radius:4px; }
+.selection-bar button:disabled { opacity:.45; }
+.task-row { display:flex; align-items:center; }
+.task-row > input { margin-left:10px; }
+.task-row > :last-child { flex:1; min-width:0; }
 .empty {
   text-align: center;
   color: var(--text-soft);

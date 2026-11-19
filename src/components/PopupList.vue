@@ -6,7 +6,6 @@ import { useConfigStore } from "@/stores/configStore";
 import { installWindowShortcuts } from "@/utils/shortcuts";
 import TaskItem from "./TaskItem.vue";
 import TrashView from "./TrashView.vue";
-import UndoDelete from "./UndoDelete.vue";
 
 const taskStore = useTaskStore();
 const configStore = useConfigStore();
@@ -43,7 +42,6 @@ function close() { return invoke("hide_window", { label: "popup" }); }
       <TaskItem v-for="task in filtered" :key="task.id" :task="task" />
       <div v-if="!filtered.length" class="empty">无匹配任务</div>
     </div>
-    <UndoDelete />
   </div>
 </template>
 

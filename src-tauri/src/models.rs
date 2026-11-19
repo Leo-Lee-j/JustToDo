@@ -141,6 +141,17 @@ pub struct GeneralConfig {
     pub font_family: String,
     #[serde(default)]
     pub shortcuts: ShortcutConfig,
+    #[serde(default)]
+    pub task_completion_mode: TaskCompletionMode,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskCompletionMode {
+    Checkbox,
+    Gesture,
+    #[default]
+    Both,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +229,7 @@ impl Default for Config {
                 single_instance: true,
                 font_family: "Microsoft YaHei".into(),
                 shortcuts: ShortcutConfig::default(),
+                task_completion_mode: TaskCompletionMode::default(),
             },
             theme: "light".into(),
             version: APP_VERSION.into(),

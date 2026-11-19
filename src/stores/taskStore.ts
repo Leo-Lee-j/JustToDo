@@ -4,6 +4,7 @@ import type { AppData, Task, TaskStatus } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { useConfigStore } from "./configStore";
 import { syncSnapshot } from "@/utils/snapshot";
+import { useToast } from "@/composables/useToast";
 
 function dueTimestamp(task: Task) {
   const date = Date.parse(task.dueDate ?? "");
@@ -14,8 +15,7 @@ export const useTaskStore = defineStore("task", () => {
   const configStore = useConfigStore();
   const data = ref<AppData>({ tasks: [], tabs: [], categories: [], history: [] });
   const loadError = ref("");
-  const recentDelete = ref<{ id: string; title: string }>();
-  let undoTimer: ReturnType<typeof setTimeout> | undefined;
+  const { showToast } = useToast();
   const { load, refresh } = syncSnapshot("data:changed", async () => {
     data.value = await invoke<AppData>("get_app_data");
     loadError.value = "";
@@ -52,27 +52,43 @@ export const useTaskStore = defineStore("task", () => {
     if ("dueDate" in patch || "status" in patch) void invoke("check_notifications").catch(console.error);
   }
 
-  async function softDelete(id: string) {
-    const task = tasks.value.find((item) => item.id === id);
-    await mutate<void>("delete_task", { id });
-    if (!task) return;
-    clearTimeout(undoTimer);
-    recentDelete.value = { id, title: task.title };
-    undoTimer = setTimeout(() => { recentDelete.value = undefined; }, 5000);
+  async function softDeleteMany(ids: string[]) {
+    const deleted: Task[] = [];
+    try {
+      for (const id of ids) {
+        const task = tasks.value.find((item) => item.id === id && !item.deletedAt);
+        if (!task) continue;
+        await mutate<void>("delete_task", { id });
+        deleted.push(task);
+      }
+    } finally {
+      if (deleted.length) showToast({
+        message: deleted.length === 1 ? "已删除：" + deleted[0].title : "已删除 " + deleted.length + " 项任务",
+        type: "success",
+        duration: 5000,
+        action: {
+          label: "撤销",
+          handler: async () => {
+            for (const task of deleted) {
+              try { await restore(task.id); }
+              catch (error) { showToast({ type: "error", message: String(error) }); }
+            }
+          },
+        },
+      });
+    }
   }
 
   async function restore(id: string) {
-    const task = await mutate<Task>("restore_task", { id });
-    if (recentDelete.value?.id === id) recentDelete.value = undefined;
-    return task;
+    return mutate<Task>("restore_task", { id });
   }
 
   return {
-    data, tasks, history, trashed, topPriorityTasks, loadError, recentDelete, load, mutate, create, update,
+    data, tasks, history, trashed, topPriorityTasks, loadError, load, mutate, create, update,
     setStatus: (id: string, status: TaskStatus) => update(id, { status }),
     setPriority: (id: string, priority: number) => update(id, { priority }),
     reorder: (tabId: string, orderedIds: string[]) => mutate<void>("reorder_tasks", { tabId, orderedIds }),
-    softDelete, restore,
+    softDelete: (id: string) => softDeleteMany([id]), softDeleteMany, restore,
     purge: (id: string) => mutate<void>("purge_task", { id }),
   };
 });

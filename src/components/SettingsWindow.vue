@@ -97,6 +97,10 @@ async function setSoundEnabled(enabled: boolean) {
   await configStore.update(({ notification }) => ({ notification: { ...notification, soundEnabled: enabled } }));
 }
 
+async function setTaskCompletionMode(taskCompletionMode: typeof configStore.config.general.taskCompletionMode) {
+  await configStore.update(({ general }) => ({ general: { ...general, taskCompletionMode } }));
+}
+
 async function syncTaskbar(patch: Partial<typeof configStore.config.taskbar>) {
   if (await configStore.update(({ taskbar }) => ({ taskbar: { ...taskbar, ...patch } }))) {
     await invoke("sync_taskbar").catch((error) => { configStore.error = "无法调整任务栏要务：" + String(error); });
@@ -287,6 +291,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
           <option v-for="delay in [10, 30, 60, 120]" :key="delay" :value="delay">{{ delay }} 秒</option>
         </select>
       </label>
+      <label for="task-completion-mode" class="settings-label">任务完成方式</label>
+      <select id="task-completion-mode" class="taskbar-select" :value="configStore.config.general.taskCompletionMode" @change="setTaskCompletionMode(($event.target as HTMLSelectElement).value as typeof configStore.config.general.taskCompletionMode)">
+        <option value="checkbox">仅复选框</option>
+        <option value="gesture">仅手势</option>
+        <option value="both">复选框 + 手势</option>
+      </select>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.general.launchOnStartup" @change="setLaunchOnStartup(($event.target as HTMLInputElement).checked)" /> 开机自启动</label>
       <label class="settings-label">快捷键</label>
       <div class="shortcut-list">
