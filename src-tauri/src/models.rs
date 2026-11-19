@@ -109,15 +109,6 @@ pub struct WindowConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TaskbarConfig {
-    pub enabled: bool,
-    pub position: String, // left | center | right
-    pub visible_count: i32,
-    pub title: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct NotificationConfig {
     #[serde(default = "default_notifications_enabled")]
     pub enabled: bool,
@@ -182,7 +173,6 @@ impl Default for ShortcutConfig {
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub window: WindowConfig,
-    pub taskbar: TaskbarConfig,
     pub notification: NotificationConfig,
     pub general: GeneralConfig,
     pub theme: String,
@@ -211,12 +201,6 @@ impl Default for Config {
                 opacity: 100,
                 auto_hide: false,
                 auto_hide_delay: 30,
-            },
-            taskbar: TaskbarConfig {
-                enabled: true,
-                position: "right".into(),
-                visible_count: 3,
-                title: "📌 今日要务".into(),
             },
             notification: NotificationConfig {
                 enabled: true,

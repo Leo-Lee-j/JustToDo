@@ -101,12 +101,6 @@ async function setTaskCompletionMode(taskCompletionMode: typeof configStore.conf
   await configStore.update(({ general }) => ({ general: { ...general, taskCompletionMode } }));
 }
 
-async function syncTaskbar(patch: Partial<typeof configStore.config.taskbar>) {
-  if (await configStore.update(({ taskbar }) => ({ taskbar: { ...taskbar, ...patch } }))) {
-    await invoke("sync_taskbar").catch((error) => { configStore.error = "无法调整任务栏要务：" + String(error); });
-  }
-}
-
 async function refreshNotificationPermission() {
   try {
     notificationPermission.value = (await isPermissionGranted()) ? "granted" : "denied";
@@ -287,12 +281,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
       <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @change="setOpacity(Number(($event.target as HTMLInputElement).value))" />
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.window.autoHide" @change="configStore.update(({ window }) => ({ window: { ...window, autoHide: ($event.target as HTMLInputElement).checked } }))" /> 鼠标离开后收起便签</label>
       <label v-if="configStore.config.window.autoHide" class="settings-label">收起延迟
-        <select class="taskbar-select" :value="configStore.config.window.autoHideDelay" @change="configStore.update(({ window }) => ({ window: { ...window, autoHideDelay: Number(($event.target as HTMLSelectElement).value) } }))">
+        <select class="settings-select" :value="configStore.config.window.autoHideDelay" @change="configStore.update(({ window }) => ({ window: { ...window, autoHideDelay: Number(($event.target as HTMLSelectElement).value) } }))">
           <option v-for="delay in [10, 30, 60, 120]" :key="delay" :value="delay">{{ delay }} 秒</option>
         </select>
       </label>
       <label for="task-completion-mode" class="settings-label">任务完成方式</label>
-      <select id="task-completion-mode" class="taskbar-select" :value="configStore.config.general.taskCompletionMode" @change="setTaskCompletionMode(($event.target as HTMLSelectElement).value as typeof configStore.config.general.taskCompletionMode)">
+      <select id="task-completion-mode" class="settings-select" :value="configStore.config.general.taskCompletionMode" @change="setTaskCompletionMode(($event.target as HTMLSelectElement).value as typeof configStore.config.general.taskCompletionMode)">
         <option value="checkbox">仅复选框</option>
         <option value="gesture">仅手势</option>
         <option value="both">复选框 + 手势</option>
@@ -308,15 +302,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
         </div>
       </div>
       <p v-if="shortcutError" class="update-status" role="alert">{{ shortcutError }}</p>
-      <label class="settings-check"><input type="checkbox" :checked="configStore.config.taskbar.enabled" @change="syncTaskbar({ enabled: ($event.target as HTMLInputElement).checked })" /> 显示任务栏要务</label>
-      <template v-if="configStore.config.taskbar.enabled">
-        <label class="settings-label">任务栏位置</label>
-        <select class="taskbar-select" :value="configStore.config.taskbar.position" @change="syncTaskbar({ position: ($event.target as HTMLSelectElement).value as 'left' | 'center' | 'right' })">
-          <option value="left">左侧</option><option value="center">居中</option><option value="right">右侧</option>
-        </select>
-        <label class="settings-label">显示任务数</label>
-        <input class="hours-input" type="number" min="1" max="3" step="1" :value="configStore.config.taskbar.visibleCount" @change="syncTaskbar({ visibleCount: Math.max(1, Math.min(3, Math.trunc(Number(($event.target as HTMLInputElement).value)) || 1)) })" />
-      </template>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.notification.enabled" @change="setNotificationsEnabled(($event.target as HTMLInputElement).checked)" /> 桌面通知</label>
       <label class="settings-label">提前通知小时数</label>
       <input class="hours-input" type="number" min="0" max="168" step="1" :value="configStore.config.notification.reminderHours" @change="setReminderHours(Number(($event.target as HTMLInputElement).value))" />
@@ -363,7 +348,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
 .settings-label { display:block; margin:8px 0 4px; color:var(--text-soft); }
 .settings-body input[type=range] { display:block; width:100%; }
 .hours-input { width:72px; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
-.taskbar-select { width:100%; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
+.settings-select { width:100%; padding:5px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
 .font-picker { position:relative; }
 .font-picker-trigger { width:100%; display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
 .font-picker-trigger :deep(svg) { width:14px; height:14px; }

@@ -330,7 +330,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="sticky" @pointerenter="onPointerEnter" @pointerleave="onPointerLeave">
     <button v-if="collapsed" type="button" class="compact-note" aria-label="展开便签" @click="requestExpand">
-      <span>{{ pendingCount }} 待办</span><span v-if="taskStore.topPriorityTasks[0]">{{ taskStore.topPriorityTasks[0].title }}</span>
+      <span>{{ pendingCount }} 待办</span><span v-if="taskStore.topPriorityTask">{{ taskStore.topPriorityTask.title }}</span>
     </button>
     <div v-show="!collapsed" class="full-note">
     <header class="titlebar" @mousedown.left="windowApi.startDragging()">

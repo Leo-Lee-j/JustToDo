@@ -76,13 +76,6 @@ export interface WindowConfig {
   autoHideDelay: number; // 秒
 }
 
-export interface TaskbarConfig {
-  enabled: boolean;
-  position: "left" | "center" | "right";
-  visibleCount: number;
-  title: string;
-}
-
 export interface NotificationConfig {
   enabled: boolean;
   reminderHours: number;
@@ -107,7 +100,6 @@ export interface ShortcutConfig {
 
 export interface Config {
   window: WindowConfig;
-  taskbar: TaskbarConfig;
   notification: NotificationConfig;
   general: GeneralConfig;
   theme: "light" | "dark";

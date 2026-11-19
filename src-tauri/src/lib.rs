@@ -3,7 +3,6 @@ mod commands;
 mod desktop;
 mod models;
 mod storage;
-mod taskbar;
 
 use std::sync::{Mutex, OnceLock};
 use storage::{SingleInstance, Store};
@@ -191,48 +190,9 @@ fn set_win_opacity(w: &tauri::webview::WebviewWindow, alpha: f64) -> Result<(), 
     Ok(())
 }
 
-fn sync_taskbar_window(app: &AppHandle, store: &Store) -> Result<bool, String> {
-    let config = store.config();
-    let Some(win) = app.get_webview_window("taskbar") else {
-        return Ok(false);
-    };
-    if !config.taskbar.enabled {
-        let _ = win.hide();
-        return Ok(false);
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = win.hide();
-        return Ok(false);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let size = win.outer_size().map_err(|err| err.to_string())?;
-        let (x, y) = taskbar::taskbar_anchor(
-            &config.taskbar.position,
-            size.width as i32,
-            size.height as i32,
-        );
-        win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
-            .map_err(|e| e.to_string())?;
-        win.show().map_err(|e| e.to_string())?;
-        Ok(true)
-    }
-}
-
-#[tauri::command]
-fn sync_taskbar(app: AppHandle, store: tauri::State<'_, Store>) -> Result<bool, String> {
-    sync_taskbar_window(&app, &store)
-}
-
-#[tauri::command]
 fn show_popup(app: AppHandle) {
     if let Some(p) = app.get_webview_window("popup") {
-        if let Some(anchor) = app
-            .get_webview_window("taskbar")
-            .filter(|window| window.is_visible().unwrap_or(false))
-            .or_else(|| app.get_webview_window("sticky"))
-        {
+        if let Some(anchor) = app.get_webview_window("sticky") {
             if let (Ok(position), Ok(size), Ok(Some(monitor))) = (
                 anchor.outer_position(),
                 p.outer_size(),
@@ -243,14 +203,9 @@ fn show_popup(app: AppHandle) {
                 let min_y = area.position.y;
                 let max_x = min_x + (area.size.width as i32 - size.width as i32).max(0);
                 let max_y = min_y + (area.size.height as i32 - size.height as i32).max(0);
-                let y = if anchor.label() == "taskbar" {
-                    position.y - size.height as i32
-                } else {
-                    position.y
-                };
                 let _ = p.set_position(tauri::PhysicalPosition::new(
                     position.x.clamp(min_x, max_x),
-                    y.clamp(min_y, max_y),
+                    position.y.clamp(min_y, max_y),
                 ));
             }
         }
@@ -454,13 +409,11 @@ pub fn run() {
                 #[cfg(not(target_os = "windows"))]
                 let _ = w.show();
             }
-            let _ = sync_taskbar_window(app.handle(), &app.state::<Store>());
-            // 钉住条定位
             // 托盘
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "显示桌面便签", true, None::<&str>)?;
-            let today = MenuItem::with_id(app, "today", "今日要务", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &today, &quit])?;
+            let list = MenuItem::with_id(app, "list", "任务列表", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &list, &quit])?;
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
@@ -483,7 +436,7 @@ pub fn run() {
                     "show" => {
                         show_sticky(app.clone());
                     }
-                    "today" => show_popup(app.clone()),
+                    "list" => show_popup(app.clone()),
                     _ => {}
                 })
                 .build(app)?;
@@ -518,8 +471,6 @@ pub fn run() {
             commands::delete_tab,
             commands::purge_task,
             set_opacity,
-            sync_taskbar,
-            show_popup,
             show_sticky,
             set_sticky_collapsed,
             move_sticky,

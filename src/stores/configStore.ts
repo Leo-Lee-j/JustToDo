@@ -6,7 +6,6 @@ import { syncSnapshot } from "@/utils/snapshot";
 
 const DEFAULT_CONFIG: Config = {
   window: { x: 0, y: 20, width: 360, height: 480, alwaysOnTop: false, opacity: 100, autoHide: false, autoHideDelay: 30 },
-  taskbar: { enabled: true, position: "right", visibleCount: 3, title: "📌 今日要务" },
   notification: { enabled: true, reminderHours: 1, reminderType: "1hour", soundEnabled: true },
   general: {
     launchOnStartup: false, singleInstance: true, fontFamily: "Microsoft YaHei",

@@ -2,7 +2,6 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { AppData, Task, TaskStatus } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
-import { useConfigStore } from "./configStore";
 import { syncSnapshot } from "@/utils/snapshot";
 import { useToast } from "@/composables/useToast";
 
@@ -12,7 +11,6 @@ function dueTimestamp(task: Task) {
 }
 
 export const useTaskStore = defineStore("task", () => {
-  const configStore = useConfigStore();
   const data = ref<AppData>({ tasks: [], tabs: [], categories: [], history: [] });
   const loadError = ref("");
   const { showToast } = useToast();
@@ -25,11 +23,10 @@ export const useTaskStore = defineStore("task", () => {
   const history = computed(() => [...data.value.history].reverse());
   const trashed = computed(() => tasks.value.filter((task) => task.deletedAt)
     .sort((a, b) => Date.parse(b.deletedAt!) - Date.parse(a.deletedAt!)));
-  const topPriorityTasks = computed(() => tasks.value
+  const topPriorityTask = computed(() => tasks.value
     .filter((task) => !task.deletedAt && task.status !== "done" && task.status !== "cancelled")
     .sort((a, b) => a.priority - b.priority || dueTimestamp(a) - dueTimestamp(b)
-      || Date.parse(b.createdAt) - Date.parse(a.createdAt))
-    .slice(0, configStore.config.taskbar.visibleCount));
+      || Date.parse(b.createdAt) - Date.parse(a.createdAt))[0]);
 
   async function mutate<T>(command: string, args: Record<string, unknown>): Promise<T> {
     try {
@@ -84,7 +81,7 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   return {
-    data, tasks, history, trashed, topPriorityTasks, loadError, load, mutate, create, update,
+    data, tasks, history, trashed, topPriorityTask, loadError, load, mutate, create, update,
     setStatus: (id: string, status: TaskStatus) => update(id, { status }),
     setPriority: (id: string, priority: number) => update(id, { priority }),
     reorder: (tabId: string, orderedIds: string[]) => mutate<void>("reorder_tasks", { tabId, orderedIds }),
