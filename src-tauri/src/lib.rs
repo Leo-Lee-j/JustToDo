@@ -1,4 +1,6 @@
 mod commands;
+#[cfg(target_os = "windows")]
+mod desktop;
 mod models;
 mod storage;
 mod taskbar;
@@ -149,13 +151,6 @@ fn check_notifications(app: AppHandle, store: tauri::State<'_, Store>) -> Result
 // ---------- 窗口控制命令 ----------
 
 #[tauri::command]
-fn set_always_on_top(app: AppHandle, label: String, on: bool) {
-    if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.set_always_on_top(on);
-    }
-}
-
-#[tauri::command]
 fn set_opacity(app: AppHandle, label: String, opacity: i32) {
     let o = f64::from(opacity.clamp(20, 100)) / 100.0;
     if let Some(w) = app.get_webview_window(&label) {
@@ -194,24 +189,6 @@ fn set_win_opacity(w: &tauri::webview::WebviewWindow, alpha: f64) -> Result<(), 
         );
     }
     Ok(())
-}
-
-// Keep the main note as a normal non-topmost window (rather than a
-// WS_EX_TOOLWINDOW). The Shell API removes only its taskbar button.
-#[cfg(target_os = "windows")]
-fn remove_taskbar_button(w: &tauri::webview::WebviewWindow) -> Result<(), String> {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-    use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
-
-    let hwnd = w.hwnd().map_err(|e| e.to_string())?;
-    let hwnd = HWND(hwnd.0 as _);
-    unsafe {
-        let taskbar: ITaskbarList = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
-            .map_err(|e| e.to_string())?;
-        taskbar.HrInit().map_err(|e| e.to_string())?;
-        taskbar.DeleteTab(hwnd).map_err(|e| e.to_string())
-    }
 }
 
 fn sync_taskbar_window(app: &AppHandle, store: &Store) -> Result<bool, String> {
@@ -286,8 +263,22 @@ fn show_popup(app: AppHandle) {
 fn show_sticky(app: AppHandle) {
     if let Some(window) = app.get_webview_window("sticky") {
         let _ = app.emit_to("sticky", "sticky:expand", ());
+        #[cfg(target_os = "windows")]
+        match desktop::show(&window) {
+            Ok(()) => {
+                if let Err(error) = desktop::reveal_desktop() {
+                    eprintln!("无法显示 Windows 桌面：{error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("无法显示桌面便签：{error}");
+                show_popup(app);
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
         let _ = window.show();
-        let _ = window.set_focus();
+    } else {
+        show_popup(app);
     }
 }
 
@@ -315,23 +306,43 @@ fn set_sticky_collapsed(
             f64::from(config.window.opacity.clamp(20, 100)) / 100.0,
         )
     };
-    window
-        .set_size(tauri::LogicalSize::new(width, height))
-        .map_err(|err| err.to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|err| err.to_string())?;
-    window
-        .set_always_on_top(collapsed || config.window.always_on_top)
-        .map_err(|err| err.to_string())?;
     #[cfg(target_os = "windows")]
-    set_win_opacity(&window, opacity)?;
+    {
+        desktop::set_bounds(
+            &window,
+            x,
+            y,
+            (width * scale).round() as i32,
+            (height * scale).round() as i32,
+        )?;
+        set_win_opacity(&window, opacity)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.set_size(tauri::LogicalSize::new(width, height)).map_err(|err| err.to_string())?;
+        window.set_position(tauri::PhysicalPosition::new(x, y)).map_err(|err| err.to_string())?;
+        let _ = window.set_opacity(opacity);
+    }
     Ok(())
+}
+
+#[tauri::command]
+fn move_sticky(app: AppHandle, x: i32, y: i32) -> Result<(), String> {
+    let window = app.get_webview_window("sticky").ok_or("便签窗口不存在")?;
+    #[cfg(target_os = "windows")]
+    return desktop::move_to(&window, x, y);
+    #[cfg(not(target_os = "windows"))]
+    window.set_position(tauri::PhysicalPosition::new(x, y)).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 fn hide_window(app: AppHandle, label: String) {
     if let Some(w) = app.get_webview_window(&label) {
+        #[cfg(target_os = "windows")]
+        if label == "sticky" {
+            let _ = desktop::hide(&w);
+            return;
+        }
         let _ = w.hide();
     }
 }
@@ -433,20 +444,21 @@ pub fn run() {
                     let y = work.position.y + margin;
                     let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
                 }
-                let _ = w.set_always_on_top(cfg.window.always_on_top);
                 #[cfg(target_os = "windows")]
                 {
                     let _ = set_win_opacity(&w, cfg.window.opacity as f64 / 100.0);
-                    // Best effort here; the focused event below retries after the
-                    // Shell has registered the visible top-level window.
-                    let _ = remove_taskbar_button(&w);
+                    if let Err(error) = desktop::show(&w) {
+                        eprintln!("无法挂载桌面便签：{error}");
+                    }
                 }
+                #[cfg(not(target_os = "windows"))]
+                let _ = w.show();
             }
             let _ = sync_taskbar_window(app.handle(), &app.state::<Store>());
             // 钉住条定位
             // 托盘
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "显示桌面便签", true, None::<&str>)?;
             let today = MenuItem::with_id(app, "today", "今日要务", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &today, &quit])?;
             let _tray = TrayIconBuilder::new()
@@ -486,15 +498,7 @@ pub fn run() {
             if matches!(window.label(), "sticky" | "popup") {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
-            #[cfg(target_os = "windows")]
-            if window.label() == "sticky" && matches!(event, tauri::WindowEvent::Focused(true)) {
-                // Reapply after startup and after tray-based restoration without
-                // showing, focusing, or changing the note's z-order.
-                if let Some(sticky) = window.app_handle().get_webview_window("sticky") {
-                    let _ = remove_taskbar_button(&sticky);
+                    hide_window(window.app_handle().clone(), window.label().to_owned());
                 }
             }
         })
@@ -513,12 +517,12 @@ pub fn run() {
             commands::rename_tab,
             commands::delete_tab,
             commands::purge_task,
-            set_always_on_top,
             set_opacity,
             sync_taskbar,
             show_popup,
             show_sticky,
             set_sticky_collapsed,
+            move_sticky,
             hide_window,
             list_system_fonts,
         ])

@@ -2,10 +2,8 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import draggable from "vuedraggable";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow, currentMonitor, PhysicalPosition } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
-import Pin16 from "@carbon/icons-vue/lib/pin/16.js";
-import PinFilled16 from "@carbon/icons-vue/lib/pin--filled/16.js";
 import Search16 from "@carbon/icons-vue/lib/search/16.js";
 import RecentlyViewed16 from "@carbon/icons-vue/lib/recently-viewed/16.js";
 import Close16 from "@carbon/icons-vue/lib/close/16.js";
@@ -237,13 +235,6 @@ async function reorder(tasks: Task[]) {
   ordering.value = false;
 }
 
-async function toggleAlwaysOnTop() {
-  const alwaysOnTop = !configStore.config.window.alwaysOnTop;
-  if (await configStore.update(({ window }) => ({ window: { ...window, alwaysOnTop } }))) {
-    await perform(() => invoke("set_always_on_top", { label: "sticky", on: alwaysOnTop }));
-  }
-}
-
 const EDGE_MARGIN = { left: 12, top: 12, right: 8, bottom: 12 };
 const SNAP_THRESHOLD = 24;
 let snapping = false;
@@ -292,7 +283,7 @@ async function snapToEdge(movedPosition?: { x: number; y: number }) {
   if (x === position.x && y === position.y) return;
   snapping = true;
   try {
-    await windowApi.setPosition(new PhysicalPosition(x, y));
+    await invoke("move_sticky", { x, y });
   } finally {
     snapping = false;
   }
@@ -348,7 +339,6 @@ onBeforeUnmount(() => {
         <button class="pin-btn" type="button" aria-label="搜索任务" title="搜索任务" @click="focusSearch"><Search16 /></button>
         <button class="pin-btn" type="button" aria-label="任务历史" title="任务历史" @click="view = view === 'history' ? 'tasks' : 'history'"><RecentlyViewed16 /></button>
         <button class="pin-btn" type="button" aria-label="回收站" title="回收站" @click="view = view === 'trash' ? 'tasks' : 'trash'"><TrashCan16 /></button>
-        <button class="pin-btn" type="button" :aria-pressed="configStore.config.window.alwaysOnTop" :title="configStore.config.window.alwaysOnTop ? '取消置顶' : '置顶'" aria-label="置顶" @click="toggleAlwaysOnTop"><component :is="configStore.config.window.alwaysOnTop ? PinFilled16 : Pin16" /></button>
         <button class="settings-btn" type="button" aria-label="设置" title="设置" @click="showSettings = true"><Settings16 /></button>
         <button class="minimize-btn" type="button" aria-label="隐藏到托盘" title="隐藏到托盘" @click="perform(() => invoke('hide_window', { label: 'sticky' }))"><Subtract16 /></button>
       </div>
@@ -465,7 +455,6 @@ onBeforeUnmount(() => {
   color: var(--text);
 }
 .pin-btn :deep(svg) { width:16px; height:16px; }
-.pin-btn[aria-pressed=true] { color:var(--text); background:var(--border); }
 .history-panel { flex: 1; min-height: 0; overflow-y: auto; background: var(--bg); }
 .history-item { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 5px 8px; border-bottom: 1px solid var(--border); }
 .history-item.history-done { background: linear-gradient(90deg, #d7f0dc 0%, #f3fbf4 100%); }
