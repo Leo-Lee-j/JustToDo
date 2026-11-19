@@ -4,7 +4,7 @@ export type ToastType = "success" | "error" | "warning" | "info";
 
 export interface ToastAction {
   label: string;
-  handler: () => void;
+  handler: () => void | Promise<void>;
 }
 
 export interface Toast {
@@ -32,7 +32,7 @@ export function useToast() {
       id: `toast-${++idCounter}`,
       message: options.message,
       type: options.type || "info",
-      duration: options.duration || 4000,
+      duration: options.duration ?? 4000,
       action: options.action,
     };
 

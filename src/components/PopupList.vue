@@ -23,6 +23,7 @@ watch(() => configStore.config.general.shortcuts, (keys, _, onCleanup) => {
   onCleanup(installWindowShortcuts({
     search: () => { showTrash.value = false; searchInput.value?.focus(); },
     showWindow: () => void invoke("show_sticky").catch(console.error),
+    undo: () => taskStore.undoDelete(),
   }, keys));
 }, { immediate: true });
 

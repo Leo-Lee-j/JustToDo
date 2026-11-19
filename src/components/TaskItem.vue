@@ -17,7 +17,8 @@ const showCheckbox = computed(() => !props.selecting && configStore.config.gener
 const gesturesEnabled = computed(() => configStore.config.general.taskCompletionMode !== "checkbox");
 const expanded = ref(false);
 const editTitleInput = ref<HTMLInputElement>();
-const draft = ref({ title: "", notes: "", due: "", status: props.task.status, categoryId: "", tabId: "", version: "" });
+const editorForm = ref<HTMLFormElement>();
+const draft = ref({ title: "", notes: "", due: "", reminder: "", reminderEnabled: false, status: props.task.status, categoryId: "", tabId: "", version: "" });
 const busy = ref(false);
 const error = ref("");
 const category = computed(() => tabStore.categoryMap[props.task.categoryId]);
@@ -51,6 +52,11 @@ const dueLabel = computed(() => {
   const date = new Date(props.task.dueDate);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 });
+const reminderLabel = computed(() => {
+  if (!props.task.reminderEnabled || !props.task.reminderTime) return "";
+  const date = new Date(props.task.reminderTime);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+});
 const dueStatus = computed(() => {
   if (isDone.value || props.task.status === "cancelled") return "normal";
   const hours = (Date.parse(props.task.dueDate ?? "") - Date.now()) / 3_600_000;
@@ -79,11 +85,17 @@ async function run(action: () => Promise<unknown>) {
 }
 
 async function saveTask() {
-  const { title, notes, status, categoryId, tabId, due, version } = draft.value;
+  const { title, notes, status, categoryId, tabId, due, reminder, reminderEnabled, version } = draft.value;
   if (!title.trim()) return;
+  if (reminderEnabled && !reminder) {
+    error.value = "启用提醒时，请设置提醒时间";
+    return;
+  }
   const saved = await run(() => taskStore.update(props.task.id, {
     title, notes, status, categoryId, tabId,
     ...(due !== localDate(props.task.dueDate) ? { dueDate: due ? new Date(due).toISOString() : null } : {}),
+    reminderEnabled,
+    reminderTime: reminder ? new Date(reminder).toISOString() : null,
   }, version));
   if (saved) expanded.value = false;
 }
@@ -153,10 +165,11 @@ async function openEditor() {
   if (expanded.value) return;
   expanded.value = true;
   error.value = "";
-  const { title, notes, status, categoryId, tabId, dueDate, updatedAt } = props.task;
-  draft.value = { title, notes, status, categoryId, tabId, due: localDate(dueDate), version: updatedAt };
+  const { title, notes, status, categoryId, tabId, dueDate, reminderTime, reminderEnabled, updatedAt } = props.task;
+  draft.value = { title, notes, status, categoryId, tabId, due: localDate(dueDate), reminder: localDate(reminderTime), reminderEnabled, version: updatedAt };
   await nextTick();
   editTitleInput.value?.focus();
+  editorForm.value?.scrollIntoView({ block: "end" });
 }
 function closeSwipe(event: PointerEvent) {
   const target = event.target as Node;
@@ -183,6 +196,7 @@ onBeforeUnmount(() => {
       <button type="button" class="content" :tabindex="selecting ? -1 : 0" :aria-expanded="expanded" :title="selecting ? '选择任务' : '编辑任务'">
         <span class="title">{{ task.title }}</span>
         <span v-if="dueLabel" class="updated-at" :class="'due-' + dueStatus">结束：{{ dueLabel }}</span>
+        <span v-if="reminderLabel" class="updated-at reminder-label">提醒：{{ reminderLabel }}</span>
       </button>
       <button v-if="!selecting" class="priority-tag" :disabled="busy || expanded" :class="'priority-' + priority" @click.stop="cyclePriority" title="调整优先级" aria-label="调整优先级">
         P{{ priority }}
@@ -190,9 +204,16 @@ onBeforeUnmount(() => {
       <button v-if="sortable && !selecting" type="button" tabindex="-1" class="drag-handle" title="拖动排序" aria-label="拖动排序" @click.stop>⠿</button>
       </div>
     </div>
-    <form v-if="expanded && !selecting" class="task-editor" @submit.prevent="saveTask" @keydown.esc.stop="expanded = false">
+    <form v-if="expanded && !selecting" ref="editorForm" class="task-editor" @submit.prevent="saveTask" @keydown.esc.stop="expanded = false">
       <label>任务标题<input ref="editTitleInput" v-model="draft.title" maxlength="255" required /></label>
       <label>到期时间<input v-model="draft.due" type="datetime-local" /></label>
+      <label class="reminder-toggle"><input v-model="draft.reminderEnabled" type="checkbox" /> 单独提醒</label>
+      <label>提醒时间
+        <span class="reminder-input">
+          <input v-model="draft.reminder" type="datetime-local" :required="draft.reminderEnabled" :disabled="!draft.reminderEnabled" />
+          <button type="button" :disabled="!draft.reminder" @click="draft.reminder = ''">清除</button>
+        </span>
+      </label>
       <label>状态<select v-model="draft.status" aria-label="状态"><option value="todo">待办</option><option value="doing">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label>
       <label>分类<select v-model="draft.categoryId" aria-label="分类"><option v-for="item in tabStore.categories" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
       <label>所属 Tab<select v-model="draft.tabId" aria-label="所属 Tab"><option v-for="item in tabStore.sortedTabs" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
@@ -228,6 +249,7 @@ onBeforeUnmount(() => {
 .due-overdue { color:var(--danger); }
 .due-urgent { color:#b54708; }
 .due-soon { color:#946200; }
+.reminder-label { color:var(--primary); }
 .task.done .title { text-decoration:line-through; color:var(--text-soft); }
 .priority-tag { display:inline-flex; align-items:center; justify-content:center; min-width:26px; height:18px; padding:0 5px; border-radius:4px; font-size:10px; font-weight:600; line-height:1; flex-shrink:0; }
 .priority-0 { background:#fde2e2; color:#b42318; }
@@ -238,6 +260,12 @@ onBeforeUnmount(() => {
 .task-editor { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px; padding:8px; background:var(--bg-soft); border-radius:4px; font-size:12px; }
 .task-editor label { display:grid; gap:3px; min-width:0; }
 .task-editor label:first-child, .task-editor label:has(textarea), .editor-actions { grid-column:1 / -1; }
+.task-editor .reminder-toggle { display:flex; align-items:center; gap:6px; }
+.task-editor .reminder-toggle input { width:auto; }
+.reminder-input { display:flex; gap:4px; min-width:0; }
+.reminder-input input { flex:1; }
+.reminder-input button { flex:none; padding:0 5px; border:1px solid var(--border); border-radius:4px; background:var(--bg); }
+.reminder-input button:disabled { opacity:.45; }
 .task-editor input, .task-editor textarea, .task-editor select { width:100%; min-width:0; padding:4px 5px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font:inherit; }
 .task-editor textarea { min-height:42px; resize:vertical; }
 .editor-actions { display:flex; gap:8px; justify-content:flex-end; }

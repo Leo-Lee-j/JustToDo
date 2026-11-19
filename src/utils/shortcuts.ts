@@ -7,6 +7,7 @@ export interface ShortcutHandlers {
   showWindow?: () => void;
   switchTab?: (n: number) => void;
   escape?: () => void;
+  undo?: () => boolean;
 }
 
 export function eventKey(e: KeyboardEvent): string {
@@ -22,14 +23,27 @@ export function eventKey(e: KeyboardEvent): string {
 
 export function shortcutConflict(binding: string, bindings: ShortcutConfig, field: keyof ShortcutConfig): boolean {
   const normalized = binding.trim().toLowerCase();
-  return /^(ctrl|meta)[+][1-9]$/.test(normalized) || Object.entries(bindings).some(([key, value]) =>
+  return /^(ctrl|meta)[+](?:[1-9]|z)$/.test(normalized) || Object.entries(bindings).some(([key, value]) =>
     key !== field && value.trim().toLowerCase() === normalized);
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.closest(
+    "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox']",
+  ) !== null;
 }
 
 export function installWindowShortcuts(handlers: ShortcutHandlers, bindings: ShortcutConfig): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.defaultPrevented || e.isComposing || e.repeat) return;
     const key = eventKey(e).toLowerCase();
+    if (/^(ctrl|meta)[+]z$/.test(key)) {
+      const editingText = e.composedPath().some(isTextEditingTarget)
+        || isTextEditingTarget(document.activeElement);
+      if (!editingText && handlers.undo?.()) e.preventDefault();
+      return;
+    }
     for (const action of ["newTask", "newTab", "search", "showWindow"] as const) {
       const handler = handlers[action];
       if (!handler || key !== bindings[action].trim().toLowerCase()) continue;

@@ -127,6 +127,7 @@ pub fn create_task(
             reminder_time: None,
             reminder_enabled: false,
             notified_at: None,
+            reminder_notified_at: None,
             notes: notes.chars().take(255).collect(),
             subtasks: vec![],
             attachments: vec![],
@@ -192,6 +193,28 @@ fn update_active_task(
             task.due_date = due_date;
             task.notified_at = None;
         }
+    }
+    let mut reminder_changed = false;
+    if let Some(value) = patch.get("reminderTime") {
+        let reminder_time = serde_json::from_value(value.clone()).map_err(|_| "提醒时间无效")?;
+        let reminder_time = valid_date(reminder_time).map_err(|_| "提醒时间须包含有效时区")?;
+        if task.reminder_time != reminder_time {
+            task.reminder_time = reminder_time;
+            reminder_changed = true;
+        }
+    }
+    if let Some(value) = patch.get("reminderEnabled") {
+        let reminder_enabled = value.as_bool().ok_or("提醒开关无效")?;
+        if task.reminder_enabled != reminder_enabled {
+            task.reminder_enabled = reminder_enabled;
+            reminder_changed = true;
+        }
+    }
+    if task.reminder_enabled && task.reminder_time.is_none() {
+        return Err("请先设置提醒时间".into());
+    }
+    if reminder_changed {
+        task.reminder_notified_at = None;
     }
     if let Some(notes) = patch.get("notes").and_then(|value| value.as_str()) {
         task.notes = notes.chars().take(255).collect();
@@ -424,7 +447,7 @@ mod tests {
         serde_json::from_value(json!({
             "id": id, "title": id, "status": "todo", "tabId": tab_id,
             "categoryId": "cat-other", "priority": 2, "dueDate": null,
-            "reminderTime": null, "reminderEnabled": false, "notifiedAt": null,
+            "reminderTime": null, "reminderEnabled": false, "notifiedAt": null, "reminderNotifiedAt": null,
             "order": order, "notes": "", "subtasks": [], "attachments": [],
             "createdAt": now, "updatedAt": now, "completedAt": null, "deletedAt": null
         }))
@@ -538,6 +561,61 @@ mod tests {
         )
         .is_err());
         assert_eq!(data.tasks[0].due_date, updated.due_date);
+    }
+
+    #[test]
+    fn task_reminder_requires_a_valid_time_and_resets_only_its_own_deduplication() {
+        let mut data = AppData::default();
+        let mut task = task("reminder", "tab-today", 0);
+        task.notified_at = Some("due-reminder-sent".into());
+        task.reminder_notified_at = Some("custom-reminder-sent".into());
+        data.tasks.push(task);
+        let version = data.tasks[0].updated_at.clone();
+
+        let updated = update_active_task(
+            &mut data,
+            "reminder",
+            json!({ "reminderTime": "2030-03-04T10:30:00+08:00", "reminderEnabled": true }),
+            &version,
+        )
+        .unwrap();
+        assert_eq!(
+            updated.reminder_time.as_deref(),
+            Some("2030-03-04T10:30:00+08:00")
+        );
+        assert!(updated.reminder_enabled);
+        assert!(updated.reminder_notified_at.is_none());
+        assert_eq!(updated.notified_at.as_deref(), Some("due-reminder-sent"));
+
+        assert!(update_active_task(
+            &mut data,
+            "reminder",
+            json!({ "reminderTime": "not-a-date" }),
+            &updated.updated_at,
+        )
+        .is_err());
+        assert!(update_active_task(
+            &mut data,
+            "reminder",
+            json!({ "reminderEnabled": true, "reminderTime": null }),
+            &updated.updated_at,
+        )
+        .is_err());
+        assert_eq!(data.tasks[0].reminder_time, updated.reminder_time);
+    }
+
+    #[test]
+    fn existing_task_data_without_reminder_deduplication_migrates_on_read() {
+        let mut value = json!({
+            "id": "legacy", "title": "legacy", "status": "todo", "tabId": "tab-today",
+            "categoryId": "cat-other", "priority": 2, "dueDate": null,
+            "reminderTime": null, "reminderEnabled": false, "notifiedAt": null,
+            "order": 0, "notes": "", "subtasks": [], "attachments": [],
+            "createdAt": "now", "updatedAt": "now", "completedAt": null, "deletedAt": null
+        });
+        value.as_object_mut().unwrap().remove("reminderNotifiedAt");
+        let task: Task = serde_json::from_value(value).unwrap();
+        assert!(task.reminder_notified_at.is_none());
     }
 
     #[test]

@@ -33,6 +33,19 @@ fn due_within_window(
     end - now <= chrono::Duration::hours(hours.clamp(0, 168) as i64)
 }
 
+fn scheduled_reminder(
+    task: &models::Task,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    if !task.reminder_enabled || task.reminder_notified_at.is_some() {
+        return None;
+    }
+    use chrono::DateTime;
+    let reminder = DateTime::parse_from_rfc3339(task.reminder_time.as_deref()?).ok()?;
+    let reminder = reminder.with_timezone(&chrono::Utc);
+    (reminder <= now).then_some(reminder)
+}
+
 fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, String> {
     let _check_guard = NOTIFICATION_CHECK_LOCK
         .get_or_init(|| Mutex::new(()))
@@ -47,33 +60,46 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
     }
     let now = Utc::now();
     let mut due = Vec::new();
+    let mut reminders = Vec::new();
     for task in &store.data().tasks {
-        if task.deleted_at.is_some() || task.notified_at.is_some() {
+        if task.deleted_at.is_some()
+            || !matches!(
+                task.status,
+                models::TaskStatus::Todo | models::TaskStatus::Doing
+            )
+        {
             continue;
         }
-        if !matches!(
-            task.status,
-            models::TaskStatus::Todo | models::TaskStatus::Doing
-        ) {
-            continue;
+        if task.notified_at.is_none() {
+            if let Some(raw) = task.due_date.as_deref() {
+                if let Ok(end) = DateTime::parse_from_rfc3339(raw) {
+                    let end = end.with_timezone(&Utc);
+                    if due_within_window(end, now, config.notification.reminder_hours) {
+                        due.push((task.id.clone(), task.title.clone(), raw.to_string(), end));
+                    }
+                }
+            }
         }
-        let Some(raw) = task.due_date.as_deref() else {
-            continue;
-        };
-        let Ok(end) = DateTime::parse_from_rfc3339(raw) else {
-            continue;
-        };
-        let end = end.with_timezone(&Utc);
-        if due_within_window(end, now, config.notification.reminder_hours) {
-            due.push((task.id.clone(), task.title.clone(), raw.to_string(), end));
+        if let Some(reminder) = scheduled_reminder(task, now) {
+            reminders.push((
+                task.id.clone(),
+                task.title.clone(),
+                task.reminder_time
+                    .clone()
+                    .expect("scheduled reminder has a time"),
+                reminder,
+            ));
         }
     }
-    if due.is_empty() {
+    if due.is_empty() && reminders.is_empty() {
         return Ok(0);
     }
 
+    let reminder_ids: std::collections::HashSet<&str> =
+        reminders.iter().map(|(id, ..)| id.as_str()).collect();
     let mut lines: Vec<String> = due
         .iter()
+        .filter(|(id, ..)| !reminder_ids.contains(id.as_str()))
         .take(5)
         .map(|(_, title, _, end)| {
             let seconds = (*end - now).num_seconds();
@@ -87,8 +113,31 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
             format!("{} · {}", title, remaining)
         })
         .collect();
-    if due.len() > 5 {
-        lines.push(format!("还有 {} 个任务", due.len() - 5));
+    lines.extend(
+        reminders
+            .iter()
+            .take(5usize.saturating_sub(lines.len()))
+            .map(|(id, title, _, reminder)| {
+                let scheduled = reminder.with_timezone(&chrono::Local).format("%m/%d %H:%M");
+                if let Some((_, _, _, end)) = due.iter().find(|(due_id, ..)| due_id == id) {
+                    let seconds = (*end - now).num_seconds();
+                    let remaining = if seconds <= 0 {
+                        "已到期".to_string()
+                    } else if seconds < 3600 {
+                        format!("剩余 {} 分钟", (seconds + 59) / 60)
+                    } else {
+                        format!("剩余 {} 小时", (seconds + 3599) / 3600)
+                    };
+                    format!("{} · 提醒时间已到 ({}) · {}", title, scheduled, remaining)
+                } else {
+                    format!("{} · 提醒时间已到 ({})", title, scheduled)
+                }
+            }),
+    );
+    let due_ids: std::collections::HashSet<&str> = due.iter().map(|(id, ..)| id.as_str()).collect();
+    let total = due_ids.len() + reminder_ids.difference(&due_ids).count();
+    if total > lines.len() {
+        lines.push(format!("还有 {} 条提醒", total - lines.len()));
     }
     let mut builder = app
         .notification()
@@ -101,13 +150,23 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
     builder.show().map_err(|e| e.to_string())?;
 
     let notified_at = models::now_utc();
-    let count = due.len();
+    let count = total;
     store.mutate(|data| {
         for (id, _, date, _) in &due {
             if let Some(task) = data.tasks.iter_mut().find(|task| {
                 task.id == *id && task.due_date.as_ref() == Some(date) && task.notified_at.is_none()
             }) {
                 task.notified_at = Some(notified_at.clone());
+            }
+        }
+        for (id, _, reminder_time, _) in &reminders {
+            if let Some(task) = data.tasks.iter_mut().find(|task| {
+                task.id == *id
+                    && task.reminder_enabled
+                    && task.reminder_time.as_ref() == Some(reminder_time)
+                    && task.reminder_notified_at.is_none()
+            }) {
+                task.reminder_notified_at = Some(notified_at.clone());
             }
         }
         Ok(())
@@ -118,8 +177,59 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
 
 #[cfg(test)]
 mod notification_tests {
-    use super::due_within_window;
-    use chrono::{Duration, Utc};
+    use super::{due_within_window, scheduled_reminder};
+    use crate::models::{Task, TaskStatus};
+    use chrono::{DateTime, Duration, Utc};
+
+    fn reminder_task(
+        reminder_time: Option<String>,
+        reminder_enabled: bool,
+        reminder_notified_at: Option<String>,
+    ) -> Task {
+        Task {
+            id: "task-reminder".into(),
+            title: "提醒测试".into(),
+            status: TaskStatus::Todo,
+            tab_id: "tab-today".into(),
+            category_id: "cat-other".into(),
+            priority: 2,
+            due_date: None,
+            reminder_time,
+            reminder_enabled,
+            notified_at: None,
+            reminder_notified_at,
+            order: 0,
+            notes: String::new(),
+            subtasks: vec![],
+            attachments: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+            completed_at: None,
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn scheduled_reminders_wait_then_fire_once() {
+        let now = Utc::now();
+        let future = (now + Duration::minutes(1)).to_rfc3339();
+        let task = reminder_task(Some(future), true, None);
+        assert!(scheduled_reminder(&task, now).is_none());
+
+        let due = (now - Duration::seconds(1)).to_rfc3339();
+        let task = reminder_task(Some(due.clone()), true, None);
+        assert_eq!(
+            scheduled_reminder(&task, now),
+            DateTime::parse_from_rfc3339(&due)
+                .ok()
+                .map(|v| v.with_timezone(&Utc))
+        );
+
+        let task = reminder_task(Some(due.clone()), true, Some(now.to_rfc3339()));
+        assert!(scheduled_reminder(&task, now).is_none());
+        let task = reminder_task(Some(due), false, None);
+        assert!(scheduled_reminder(&task, now).is_none());
+    }
 
     #[test]
     fn zero_hours_only_matches_due_or_overdue() {
@@ -274,8 +384,12 @@ fn set_sticky_collapsed(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        window.set_size(tauri::LogicalSize::new(width, height)).map_err(|err| err.to_string())?;
-        window.set_position(tauri::PhysicalPosition::new(x, y)).map_err(|err| err.to_string())?;
+        window
+            .set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|err| err.to_string())?;
         let _ = window.set_opacity(opacity);
     }
     Ok(())
@@ -287,7 +401,9 @@ fn move_sticky(app: AppHandle, x: i32, y: i32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     return desktop::move_to(&window, x, y);
     #[cfg(not(target_os = "windows"))]
-    window.set_position(tauri::PhysicalPosition::new(x, y)).map_err(|err| err.to_string())
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]

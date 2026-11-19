@@ -25,6 +25,7 @@ export interface Task {
   reminderTime: string | null; // UTC ISO 8601
   reminderEnabled: boolean;
   notifiedAt: string | null; // 去重用
+  reminderNotifiedAt: string | null; // 单任务提醒去重
   order: number;
   notes: string;
   subtasks: SubTask[];

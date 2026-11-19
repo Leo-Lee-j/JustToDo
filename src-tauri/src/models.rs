@@ -43,6 +43,8 @@ pub struct Task {
     pub reminder_time: Option<String>,
     pub reminder_enabled: bool,
     pub notified_at: Option<String>,
+    #[serde(default)]
+    pub reminder_notified_at: Option<String>,
     pub order: i32,
     pub notes: String,
     pub subtasks: Vec<SubTask>,
@@ -70,7 +72,9 @@ pub struct TaskHistoryEntry {
     pub due_date: Option<String>,
 }
 
-fn default_history_status() -> TaskStatus { TaskStatus::Todo }
+fn default_history_status() -> TaskStatus {
+    TaskStatus::Todo
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,9 +124,15 @@ pub struct NotificationConfig {
     pub sound_enabled: bool,
 }
 
-fn default_reminder_hours() -> i32 { 1 }
-fn default_notifications_enabled() -> bool { true }
-fn default_sound_enabled() -> bool { true }
+fn default_reminder_hours() -> i32 {
+    1
+}
+fn default_notifications_enabled() -> bool {
+    true
+}
+fn default_sound_enabled() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,14 +168,27 @@ pub struct ShortcutConfig {
     pub show_window: String,
 }
 
-fn default_new_task_shortcut() -> String { "Ctrl+N".into() }
-fn default_new_tab_shortcut() -> String { "Ctrl+Shift+T".into() }
-fn default_search_shortcut() -> String { "Ctrl+F".into() }
-fn default_show_window_shortcut() -> String { "Ctrl+Shift+Space".into() }
+fn default_new_task_shortcut() -> String {
+    "Ctrl+N".into()
+}
+fn default_new_tab_shortcut() -> String {
+    "Ctrl+Shift+T".into()
+}
+fn default_search_shortcut() -> String {
+    "Ctrl+F".into()
+}
+fn default_show_window_shortcut() -> String {
+    "Ctrl+Shift+Space".into()
+}
 
 impl Default for ShortcutConfig {
     fn default() -> Self {
-        Self { new_task: default_new_task_shortcut(), new_tab: default_new_tab_shortcut(), search: default_search_shortcut(), show_window: default_show_window_shortcut() }
+        Self {
+            new_task: default_new_task_shortcut(),
+            new_tab: default_new_tab_shortcut(),
+            search: default_search_shortcut(),
+            show_window: default_show_window_shortcut(),
+        }
     }
 }
 
@@ -252,12 +275,54 @@ impl Default for AppData {
                 },
             ],
             categories: vec![
-                Category { id: "cat-work".into(), name: "工作".into(), color: "#4A90D9".into(), icon: "💼".into(), order: 0, is_built_in: true },
-                Category { id: "cat-personal".into(), name: "个人".into(), color: "#7ED321".into(), icon: "🏠".into(), order: 1, is_built_in: true },
-                Category { id: "cat-study".into(), name: "学习".into(), color: "#9013FE".into(), icon: "📚".into(), order: 2, is_built_in: true },
-                Category { id: "cat-shopping".into(), name: "购物".into(), color: "#F5A623".into(), icon: "🛒".into(), order: 3, is_built_in: true },
-                Category { id: "cat-health".into(), name: "健康".into(), color: "#D0021B".into(), icon: "🏃".into(), order: 4, is_built_in: true },
-                Category { id: "cat-other".into(), name: "其他".into(), color: "#9B9B9B".into(), icon: "📝".into(), order: 5, is_built_in: true },
+                Category {
+                    id: "cat-work".into(),
+                    name: "工作".into(),
+                    color: "#4A90D9".into(),
+                    icon: "💼".into(),
+                    order: 0,
+                    is_built_in: true,
+                },
+                Category {
+                    id: "cat-personal".into(),
+                    name: "个人".into(),
+                    color: "#7ED321".into(),
+                    icon: "🏠".into(),
+                    order: 1,
+                    is_built_in: true,
+                },
+                Category {
+                    id: "cat-study".into(),
+                    name: "学习".into(),
+                    color: "#9013FE".into(),
+                    icon: "📚".into(),
+                    order: 2,
+                    is_built_in: true,
+                },
+                Category {
+                    id: "cat-shopping".into(),
+                    name: "购物".into(),
+                    color: "#F5A623".into(),
+                    icon: "🛒".into(),
+                    order: 3,
+                    is_built_in: true,
+                },
+                Category {
+                    id: "cat-health".into(),
+                    name: "健康".into(),
+                    color: "#D0021B".into(),
+                    icon: "🏃".into(),
+                    order: 4,
+                    is_built_in: true,
+                },
+                Category {
+                    id: "cat-other".into(),
+                    name: "其他".into(),
+                    color: "#9B9B9B".into(),
+                    icon: "📝".into(),
+                    order: 5,
+                    is_built_in: true,
+                },
             ],
             history: vec![],
         }

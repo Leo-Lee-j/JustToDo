@@ -306,6 +306,7 @@ watch(() => configStore.config.general.shortcuts, (bindings, _, onCleanup) => {
       else if (tabEditor.value) tabEditor.value = undefined;
       else if (showComposerNotes.value) showComposerNotes.value = false;
     },
+    undo: () => taskStore.undoDelete(),
   }, bindings));
 }, { immediate: true });
 
