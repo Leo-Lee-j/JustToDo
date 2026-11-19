@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Task } from "@/types";
 import { useTaskStore } from "@/stores/taskStore";
 import { useTabStore } from "@/stores/tabStore";
@@ -7,11 +7,14 @@ import TrashCan16 from "@carbon/icons-vue/lib/trash-can/16.js";
 import Checkbox16 from "@carbon/icons-vue/lib/checkbox/16.js";
 import CheckboxChecked16 from "@carbon/icons-vue/lib/checkbox--checked/16.js";
 
-const props = defineProps<{ task: Task }>();
+const props = defineProps<{ task: Task; sortable?: boolean }>();
 const taskStore = useTaskStore();
 const tabStore = useTabStore();
 const expanded = ref(false);
-const notes = ref(props.task.notes || "");
+const editTitleInput = ref<HTMLInputElement>();
+const draft = ref({ title: "", notes: "", due: "", status: props.task.status, categoryId: "", tabId: "", version: "" });
+const busy = ref(false);
+const error = ref("");
 const category = computed(() => tabStore.categoryMap[props.task.categoryId]);
 const isDone = computed(() => props.task.status === "done");
 const priority = computed(() => Math.max(0, Math.min(4, props.task.priority)));
@@ -41,26 +44,51 @@ const dueLabel = computed(() => {
   const date = new Date(props.task.dueDate);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 });
-watch(() => props.task.notes, (value) => { notes.value = value || ""; });
-
-async function saveNotes() {
-  const value = notes.value.slice(0, 255);
-  notes.value = value;
-  if (value !== props.task.notes) await taskStore.update(props.task.id, { notes: value });
+function localDate(raw: string | null) {
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
-async function toggle() { await taskStore.setStatus(props.task.id, isDone.value ? "todo" : "done"); }
-async function cyclePriority() { await taskStore.setPriority(props.task.id, priority.value >= 4 ? 0 : priority.value + 1); }
-async function del() { await taskStore.softDelete(props.task.id); }
+
+async function run(action: () => Promise<unknown>) {
+  if (busy.value) return false;
+  busy.value = true;
+  error.value = "";
+  try {
+    await action();
+    return true;
+  } catch (err) {
+    error.value = String(err);
+    return false;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function saveTask() {
+  const { title, notes, status, categoryId, tabId, due, version } = draft.value;
+  if (!title.trim()) return;
+  const saved = await run(() => taskStore.update(props.task.id, {
+    title, notes, status, categoryId, tabId,
+    ...(due !== localDate(props.task.dueDate) ? { dueDate: due ? new Date(due).toISOString() : null } : {}),
+  }, version));
+  if (saved) expanded.value = false;
+}
+
+function toggle() { return run(() => taskStore.setStatus(props.task.id, isDone.value ? "todo" : "done")); }
+function cyclePriority() { return run(() => taskStore.setPriority(props.task.id, priority.value >= 4 ? 0 : priority.value + 1)); }
+function del() { return run(() => taskStore.softDelete(props.task.id)); }
 function onPointerDown(event: PointerEvent) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
-  if ((event.target as HTMLElement).closest("button")) return;
+  if ((event.target as HTMLElement).closest("button:not(.content)")) return;
   revealed.value = false;
   pointerId.value = event.pointerId;
   pointerStartX.value = event.clientX;
   pointerStartY.value = event.clientY;
   swiping.value = false;
   pointerMoved.value = false;
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  (event.target as HTMLElement).setPointerCapture(event.pointerId);
 }
 function onPointerMove(event: PointerEvent) {
   if (pointerId.value !== event.pointerId) return;
@@ -75,10 +103,10 @@ function onPointerMove(event: PointerEvent) {
   }
   swipeX.value = Math.min(deleteWidth, Math.max(0, dx));
 }
-async function onPointerUp(event: PointerEvent) {
+function onPointerUp(event: PointerEvent) {
   if (pointerId.value !== event.pointerId) return;
   pointerId.value = null;
-  const shouldReveal = swiping.value && swipeX.value >= deleteWidth * 0.4;
+  const shouldReveal = event.type !== "pointercancel" && swiping.value && swipeX.value >= deleteWidth * 0.4;
   if (swiping.value || pointerMoved.value) {
     suppressClick.value = true;
     window.setTimeout(() => { suppressClick.value = false; }, 220);
@@ -88,16 +116,21 @@ async function onPointerUp(event: PointerEvent) {
   swiping.value = false;
   pointerMoved.value = false;
 }
-function onTaskClick() {
+async function onTaskClick() {
   if (suppressClick.value || swipeX.value !== 0) return;
   expanded.value = !expanded.value;
+  error.value = "";
+  if (!expanded.value) return;
+  const { title, notes, status, categoryId, tabId, dueDate, updatedAt } = props.task;
+  draft.value = { title, notes, status, categoryId, tabId, due: localDate(dueDate), version: updatedAt };
+  await nextTick();
+  editTitleInput.value?.focus();
 }
 function closeSwipe(event: PointerEvent) {
   const target = event.target as Node;
   if (!target || (target as HTMLElement).closest?.(`[data-task-id="${props.task.id}"]`)) return;
   revealed.value = false;
   swipeX.value = 0;
-  expanded.value = false;
 }
 onMounted(() => document.addEventListener("pointerdown", closeSwipe));
 onBeforeUnmount(() => document.removeEventListener("pointerdown", closeSwipe));
@@ -106,26 +139,36 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", closeSwipe));
 <template>
   <div class="task-wrap" :class="{ expanded }" :data-task-id="task.id">
     <div class="task-surface">
-      <button class="swipe-delete" :class="{ revealed }" :style="{ opacity: Math.min(1, swipeX / deleteWidth) }" @click.stop="del" aria-label="删除任务" title="删除任务">
+      <button class="swipe-delete" :class="{ revealed }" :tabindex="revealed ? 0 : -1" :style="{ opacity: Math.min(1, swipeX / deleteWidth) }" @click.stop="del" aria-label="删除任务" title="删除任务">
         <TrashCan16 />
       </button>
       <div class="task" :title="`更新时间：${updatedLabel}`" :class="{ done: isDone, swiping }" :style="{ background: isDone ? 'linear-gradient(90deg, #d7f0dc 0%, #f3fbf4 100%)' : (category ? category.color + '14' : 'transparent'), transform: `translateX(${swipeX}px)` }" @click="onTaskClick" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
       <div class="color-bar" :style="{ background: category?.color || '#9B9B9B' }"></div>
-      <button class="check" @click.stop="toggle" :aria-label="isDone ? '标记未完成' : '标记完成'">{{ isDone ? "✓" : "○" }}</button>
-       <button class="check-modern" @click.stop="toggle" :aria-label="isDone ? '标记未完成' : '标记完成'" :title="isDone ? '标记未完成' : '标记完成'"><component :is="isDone ? CheckboxChecked16 : Checkbox16" /></button>
-       <div class="content">
+      <button class="check-modern" :disabled="busy || expanded" @click.stop="toggle" :aria-label="isDone ? '标记未完成' : '标记完成'" :title="isDone ? '标记未完成' : '标记完成'"><component :is="isDone ? CheckboxChecked16 : Checkbox16" /></button>
+      <button type="button" class="content" :aria-expanded="expanded" @click.stop="onTaskClick" title="编辑任务">
         <span class="title">{{ task.title }}</span>
         <span v-if="dueLabel" class="updated-at">结束：{{ dueLabel }}</span>
-      </div>
-      <button class="priority-tag" :class="`priority-${priority}`" @click.stop="cyclePriority" title="调整优先级" aria-label="调整优先级">
+      </button>
+      <button class="priority-tag" :disabled="busy || expanded" :class="'priority-' + priority" @click.stop="cyclePriority" title="调整优先级" aria-label="调整优先级">
         P{{ priority }}
       </button>
+      <button v-if="sortable" type="button" tabindex="-1" class="drag-handle" title="拖动排序" aria-label="拖动排序" @click.stop>⠿</button>
       </div>
     </div>
-    <div v-if="expanded" class="notes-panel" @click.stop>
-      <textarea v-model="notes" maxlength="255" placeholder="添加备注..." @blur="saveNotes(); expanded = false" />
-      <span class="notes-count">{{ notes.length }}/255</span>
-    </div>
+    <form v-if="expanded" class="task-editor" @submit.prevent="saveTask" @keydown.esc.stop="expanded = false">
+      <label>任务标题<input ref="editTitleInput" v-model="draft.title" maxlength="255" required /></label>
+      <label>到期时间<input v-model="draft.due" type="datetime-local" /></label>
+      <label>状态<select v-model="draft.status" aria-label="状态"><option value="todo">待办</option><option value="doing">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label>
+      <label>分类<select v-model="draft.categoryId" aria-label="分类"><option v-for="item in tabStore.categories" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+      <label>所属 Tab<select v-model="draft.tabId" aria-label="所属 Tab"><option v-for="item in tabStore.sortedTabs" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+      <label>备注<textarea v-model="draft.notes" maxlength="255" /></label>
+      <div class="editor-actions">
+        <button type="button" class="delete-btn" :disabled="busy" @click="del">删除</button>
+        <button type="button" :disabled="busy" @click="expanded = false; error = ''">取消</button>
+        <button type="submit" :disabled="busy || !draft.title.trim()">保存</button>
+      </div>
+    </form>
+    <p v-if="error" class="task-error" role="alert">{{ error }}</p>
   </div>
 </template>
 
@@ -138,12 +181,13 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", closeSwipe));
 .swipe-delete.revealed { pointer-events:auto; }
 .swipe-delete :deep(svg) { width:16px; height:16px; }
 .color-bar { width:3px; height:24px; border-radius:2px; flex-shrink:0; }
-.check { display:none; }
 .check-modern { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; color:var(--text-soft); border-radius:4px; flex-shrink:0; }
 .check-modern:hover { background:var(--bg-soft); color:var(--primary); }
 .task.done .check-modern { color:var(--primary); }
 .check-modern :deep(svg) { width:16px; height:16px; }
-.content { flex:1; min-width:0; }
+.content { flex:1; min-width:0; text-align:left; }
+.drag-handle { cursor:grab; padding:0 4px; color:var(--text-soft); touch-action:none; }
+.drag-handle:active { cursor:grabbing; }
 .title { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
 .updated-at { display:block; margin-top:2px; color:var(--text-soft); font-size:10px; line-height:1.2; }
 .task.done .title { text-decoration:line-through; color:var(--text-soft); }
@@ -153,7 +197,13 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", closeSwipe));
 .priority-2 { background:#fff4cc; color:#946200; }
 .priority-3 { background:#dcecff; color:#175cd3; }
 .priority-4 { background:#eceff1; color:#5f6368; }
-.notes-panel { position:relative; width:100%; padding:4px 0 8px; }
-.notes-panel textarea { width:100%; min-height:48px; max-height:100px; resize:vertical; padding:6px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); font:inherit; font-size:12px; line-height:1.4; }
-.notes-count { position:absolute; right:4px; bottom:12px; font-size:10px; color:var(--text-soft); }
+.task-editor { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px; padding:8px; background:var(--bg-soft); border-radius:4px; font-size:12px; }
+.task-editor label { display:grid; gap:3px; min-width:0; }
+.task-editor label:first-child, .task-editor label:has(textarea), .editor-actions { grid-column:1 / -1; }
+.task-editor input, .task-editor textarea, .task-editor select { width:100%; min-width:0; padding:4px 5px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font:inherit; }
+.task-editor textarea { min-height:42px; resize:vertical; }
+.editor-actions { display:flex; gap:8px; justify-content:flex-end; }
+.editor-actions button { padding:4px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; }
+.editor-actions .delete-btn { margin-right:auto; color:var(--danger); }
+.task-error { padding:4px 8px; color:var(--danger); overflow-wrap:anywhere; font-size:12px; }
 </style>

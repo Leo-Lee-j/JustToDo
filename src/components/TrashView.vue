@@ -1,62 +1,53 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import type { Task } from "@/types";
+import { ref } from "vue";
+import { useTaskStore } from "@/stores/taskStore";
 
-const tasks = ref<Task[]>([]);
-const loading = ref(true);
+const store = useTaskStore();
+const pendingPurge = ref<string>();
+const busy = ref(false);
+const error = ref("");
 
-async function load() {
-  loading.value = true;
-  try {
-    tasks.value = await invoke<Task[]>("get_trashed_tasks");
-  } finally {
-    loading.value = false;
+async function perform(action: () => Promise<unknown>) {
+  if (busy.value) return;
+  busy.value = true;
+  error.value = "";
+  try { await action(); pendingPurge.value = undefined; }
+  catch (err) { error.value = String(err); }
+  finally { busy.value = false; }
+}
+
+function purge(id: string) {
+  if (pendingPurge.value !== id) {
+    pendingPurge.value = id;
+    return;
   }
+  void perform(() => store.purge(id));
 }
-
-async function restore(id: string) {
-  await invoke("restore_task", { id });
-  tasks.value = tasks.value.filter((task) => task.id !== id);
-}
-
-async function purge(id: string) {
-  await invoke("purge_task", { id });
-  tasks.value = tasks.value.filter((task) => task.id !== id);
-}
-
-onMounted(load);
 </script>
 
 <template>
-  <main class="trash">
-    <header class="trash-head">
-      <h1>回收站</h1>
-      <button class="close" title="关闭" @click="invoke('hide_window', { label: 'sticky' })">✕</button>
-    </header>
-    <div v-if="loading" class="empty">正在加载...</div>
-    <div v-else-if="!tasks.length" class="empty">回收站为空</div>
-    <ul v-else class="trash-list">
-      <li v-for="task in tasks" :key="task.id" class="trash-item">
-        <span class="task-title">{{ task.title }}</span>
-        <span class="task-date">{{ task.deletedAt?.slice(0, 10) }}</span>
-        <button title="恢复" @click="restore(task.id)">恢复</button>
-        <button class="danger" title="永久删除" @click="purge(task.id)">删除</button>
+  <section class="trash" aria-label="回收站">
+    <h2>回收站</h2>
+    <p v-if="pendingPurge" class="notice">再次点击即可彻底删除。 <button @click="pendingPurge = undefined">取消</button></p>
+    <p v-if="error" class="notice" role="alert">{{ error }}</p>
+    <p v-if="!store.trashed.length" class="empty">回收站为空</p>
+    <ul v-else>
+      <li v-for="task in store.trashed" :key="task.id">
+        <span :title="task.title">{{ task.title }}</span>
+        <button type="button" :disabled="busy" @click="perform(() => store.restore(task.id))">恢复</button>
+        <button type="button" class="danger" :disabled="busy" @click="purge(task.id)">{{ pendingPurge === task.id ? '确认彻底删除' : '彻底删除' }}</button>
       </li>
     </ul>
-  </main>
+  </section>
 </template>
 
 <style scoped>
-.trash { height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
-.trash-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-h1 { font-size: 14px; }
-.close { color: var(--text-soft); padding: 2px 6px; }
-.empty { padding: 36px 12px; text-align: center; color: var(--text-soft); font-size: 12px; }
-.trash-list { list-style: none; overflow: auto; padding: 6px; }
-.trash-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border); min-height: 38px; }
-.task-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.task-date { color: var(--text-soft); font-size: 11px; }
-.trash-item button { color: var(--primary); font-size: 12px; }
-.trash-item .danger { color: var(--danger); }
+.trash { flex:1; min-height:0; overflow:auto; padding:8px 10px; }
+h2 { font-size:13px; margin-bottom:8px; }
+li { display:flex; gap:8px; padding:8px 0; align-items:center; border-bottom:1px solid var(--border); }
+li span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+li button { flex:none; font-size:12px; }
+.empty { color:var(--text-soft); padding:16px; text-align:center; font-size:12px; }
+.notice, .danger { color:var(--danger); font-size:12px; overflow-wrap:anywhere; }
+.notice button { text-decoration:underline; }
 </style>

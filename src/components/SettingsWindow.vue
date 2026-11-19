@@ -10,12 +10,13 @@ import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notif
 import ChevronDown16 from "@carbon/icons-vue/lib/chevron--down/16.js";
 import Close16 from "@carbon/icons-vue/lib/close/16.js";
 import { useConfigStore } from "@/stores/configStore";
+import { eventKey, shortcutConflict } from "@/utils/shortcuts";
 import type { ShortcutConfig } from "@/types";
 
 const configStore = useConfigStore();
 const windowApi = getCurrentWindow();
-const emit = defineEmits<{ close: [] }>();
-const currentVersion = ref("0.0.2");
+const emit = defineEmits<{ close: []; openTrash: [] }>();
+const currentVersion = ref(configStore.config.version);
 const availableVersion = ref("");
 const updateNotes = ref("");
 const updateProgress = ref(0);
@@ -28,6 +29,8 @@ const fontSearch = ref("");
 const fontPickerOpen = ref(false);
 const fontLoading = ref(false);
 const recordingShortcut = ref<keyof ShortcutConfig | null>(null);
+const shortcutError = ref("");
+const notificationStatus = ref("");
 const fallbackFonts = ["Microsoft YaHei", "Arial", "Segoe UI", "sans-serif", "serif", "monospace"];
 let pendingUpdate: Awaited<ReturnType<typeof check>> = null;
 
@@ -55,56 +58,71 @@ watch(fontPickerOpen, (isOpen) => {
 });
 
 async function setFontFamily(value: string) {
-  await configStore.update({ general: { ...configStore.config.general, fontFamily: value } });
+  await configStore.update(({ general }) => ({ general: { ...general, fontFamily: value } }));
   fontPickerOpen.value = false;
 }
 
 async function setOpacity(value: number) {
-  await configStore.update({ window: { ...configStore.config.window, opacity: value } });
-  await invoke("set_opacity", { label: "sticky", opacity: value });
+  if (await configStore.update(({ window }) => ({ window: { ...window, opacity: value } }))) {
+    await invoke("set_opacity", { label: "sticky", opacity: value });
+  }
 }
 
 async function setLaunchOnStartup(enabled: boolean) {
+  const previous = configStore.config.general.launchOnStartup;
   try {
     if (enabled) await enableAutostart(); else await disableAutostart();
-    await configStore.update({ general: { ...configStore.config.general, launchOnStartup: enabled } });
+    if (!await configStore.update(({ general }) => ({ general: { ...general, launchOnStartup: enabled } }))) {
+      if (previous) await enableAutostart(); else await disableAutostart();
+    }
   } catch {
     updateStatus.value = "无法修改开机启动设置";
   }
 }
 
 async function setNotificationsEnabled(enabled: boolean) {
-  await configStore.update({ notification: { ...configStore.config.notification, enabled } });
-  if (enabled) await invoke("check_notifications").catch(() => undefined);
+  if (await configStore.update(({ notification }) => ({ notification: { ...notification, enabled } })) && enabled) {
+    await invoke("check_notifications").catch(console.error);
+  }
 }
 
 async function setReminderHours(value: number) {
-  await configStore.update({ notification: { ...configStore.config.notification, reminderHours: Math.max(0, Math.min(168, value || 0)) } });
-  if (configStore.config.notification.enabled) await invoke("check_notifications").catch(() => undefined);
+  const reminderHours = Math.max(0, Math.min(168, Math.trunc(value) || 0));
+  if (await configStore.update(({ notification }) => ({ notification: { ...notification, reminderHours } })) && configStore.config.notification.enabled) {
+    await invoke("check_notifications").catch(console.error);
+  }
 }
 
 async function setSoundEnabled(enabled: boolean) {
-  await configStore.update({ notification: { ...configStore.config.notification, soundEnabled: enabled } });
+  await configStore.update(({ notification }) => ({ notification: { ...notification, soundEnabled: enabled } }));
 }
 
 async function syncTaskbar(patch: Partial<typeof configStore.config.taskbar>) {
-  await configStore.update({ taskbar: { ...configStore.config.taskbar, ...patch } });
-  await invoke("sync_taskbar");
+  if (await configStore.update(({ taskbar }) => ({ taskbar: { ...taskbar, ...patch } }))) {
+    await invoke("sync_taskbar").catch((error) => { configStore.error = "无法调整任务栏要务：" + String(error); });
+  }
 }
 
 async function refreshNotificationPermission() {
   try {
-    notificationPermission.value = (await isPermissionGranted()) ? "granted" : "unknown";
+    notificationPermission.value = (await isPermissionGranted()) ? "granted" : "denied";
   } catch {
     notificationPermission.value = "unknown";
   }
 }
 
 async function testNotification() {
+  notificationStatus.value = "";
   let granted = await isPermissionGranted().catch(() => false);
   if (!granted) granted = (await requestPermission().catch(() => "denied")) === "granted";
-  notificationPermission.value = granted ? "granted" : "unknown";
-  if (granted) await invoke("send_test_notification").catch(() => undefined);
+  notificationPermission.value = granted ? "granted" : "denied";
+  if (!granted) return;
+  try {
+    await invoke("send_test_notification");
+    notificationStatus.value = "测试通知已发送";
+  } catch (error) {
+    notificationStatus.value = "测试通知发送失败：" + String(error);
+  }
 }
 
 function getUpdateErrorStatus(error: unknown, phase: "check" | "install") {
@@ -202,41 +220,52 @@ async function dragSettings(event: PointerEvent) {
 }
 
 async function captureShortcut(field: keyof ShortcutConfig, event: KeyboardEvent) {
-  event.preventDefault();
   if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
-  const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
-  const parts = [event.ctrlKey ? "Ctrl" : "", event.metaKey ? "Meta" : "", event.altKey ? "Alt" : "", event.shiftKey ? "Shift" : "", key].filter(Boolean);
-  await configStore.update({ general: { ...configStore.config.general, shortcuts: { ...configStore.config.general.shortcuts, [field]: parts.join("+") } } });
+  if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+    shortcutError.value = "请使用 Ctrl、Alt 或 Win 组合键";
+    return;
+  }
+  const binding = eventKey(event);
+  const { general } = configStore.config;
+  if (shortcutConflict(binding, general.shortcuts, field)) {
+    shortcutError.value = "该组合键已被本应用使用";
+    return;
+  }
   recordingShortcut.value = null;
+  shortcutError.value = "";
+  await configStore.update(({ general }) => ({ general: { ...general, shortcuts: { ...general.shortcuts, [field]: binding } } }));
 }
 
-async function beginShortcutRecording(field: keyof ShortcutConfig) {
+function beginShortcutRecording(field: keyof ShortcutConfig) {
+  shortcutError.value = "";
   recordingShortcut.value = field;
 }
 
 async function onShortcutKeydown(event: KeyboardEvent) {
   const field = recordingShortcut.value;
   if (!field) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
   if (event.key === "Escape") {
-    event.preventDefault();
     recordingShortcut.value = null;
+    shortcutError.value = "";
     return;
   }
+  if (event.isComposing || event.repeat) return;
   await captureShortcut(field, event);
 }
 
 onMounted(async () => {
-  await configStore.load();
-  currentVersion.value = await getVersion().catch(() => "0.0.2");
-  await refreshNotificationPermission();
   window.addEventListener("keydown", onShortcutKeydown, true);
+  currentVersion.value = await getVersion().catch(() => configStore.config.version);
+  await refreshNotificationPermission();
 });
 
 onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, true));
 </script>
 
 <template>
-  <main class="settings-window" :style="{ fontFamily: configStore.config.general.fontFamily }">
+  <main class="settings-window">
     <header class="settings-header" @pointerdown="dragSettings"><strong>设置</strong><button class="close-btn" title="关闭" aria-label="关闭" @click="close"><Close16 /></button></header>
     <section class="settings-body">
       <label class="settings-label">字体</label>
@@ -251,7 +280,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
         </div>
       </div>
       <label class="settings-label">背景透明度 {{ configStore.config.window.opacity }}%</label>
-      <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @input="setOpacity(Number(($event.target as HTMLInputElement).value))" />
+      <input type="range" min="20" max="100" :value="configStore.config.window.opacity" @change="setOpacity(Number(($event.target as HTMLInputElement).value))" />
+      <label class="settings-check"><input type="checkbox" :checked="configStore.config.window.autoHide" @change="configStore.update(({ window }) => ({ window: { ...window, autoHide: ($event.target as HTMLInputElement).checked } }))" /> 鼠标离开后收起便签</label>
+      <label v-if="configStore.config.window.autoHide" class="settings-label">收起延迟
+        <select class="taskbar-select" :value="configStore.config.window.autoHideDelay" @change="configStore.update(({ window }) => ({ window: { ...window, autoHideDelay: Number(($event.target as HTMLSelectElement).value) } }))">
+          <option v-for="delay in [10, 30, 60, 120]" :key="delay" :value="delay">{{ delay }} 秒</option>
+        </select>
+      </label>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.general.launchOnStartup" @change="setLaunchOnStartup(($event.target as HTMLInputElement).checked)" /> 开机自启动</label>
       <label class="settings-label">快捷键</label>
       <div class="shortcut-list">
@@ -262,6 +297,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
           </button>
         </div>
       </div>
+      <p v-if="shortcutError" class="update-status" role="alert">{{ shortcutError }}</p>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.taskbar.enabled" @change="syncTaskbar({ enabled: ($event.target as HTMLInputElement).checked })" /> 显示任务栏要务</label>
       <template v-if="configStore.config.taskbar.enabled">
         <label class="settings-label">任务栏位置</label>
@@ -269,13 +305,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
           <option value="left">左侧</option><option value="center">居中</option><option value="right">右侧</option>
         </select>
         <label class="settings-label">显示任务数</label>
-        <input class="hours-input" type="number" min="1" max="3" step="1" :value="configStore.config.taskbar.visibleCount" @change="syncTaskbar({ visibleCount: Math.max(1, Math.min(3, Number(($event.target as HTMLInputElement).value) || 1)) })" />
+        <input class="hours-input" type="number" min="1" max="3" step="1" :value="configStore.config.taskbar.visibleCount" @change="syncTaskbar({ visibleCount: Math.max(1, Math.min(3, Math.trunc(Number(($event.target as HTMLInputElement).value)) || 1)) })" />
       </template>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.notification.enabled" @change="setNotificationsEnabled(($event.target as HTMLInputElement).checked)" /> 桌面通知</label>
       <label class="settings-label">提前通知小时数</label>
       <input class="hours-input" type="number" min="0" max="168" step="1" :value="configStore.config.notification.reminderHours" @change="setReminderHours(Number(($event.target as HTMLInputElement).value))" />
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.notification.soundEnabled" @change="setSoundEnabled(($event.target as HTMLInputElement).checked)" /> 通知声音</label>
       <div class="notification-actions"><span>权限：{{ notificationPermission === "granted" ? "已允许" : notificationPermission === "denied" ? "未允许" : "未知" }}</span><button class="update-btn" @click="testNotification">测试通知</button></div>
+      <p v-if="notificationStatus" class="update-status" role="status">{{ notificationStatus }}</p>
+      <button class="update-btn" type="button" @click="emit('openTrash')">打开回收站</button>
+      <p v-if="configStore.error" class="update-status" role="alert">{{ configStore.error }}</p>
       <div class="version-label">当前版本 v{{ currentVersion }}</div>
       <button class="update-btn" :disabled="updateBusy" @click="checkForUpdates">{{ updateBusy ? "处理中..." : "检查更新" }}</button>
       <div v-if="availableVersion" class="update-release">新版本 v{{ availableVersion }}<div class="update-notes">{{ updateNotes }}</div></div>

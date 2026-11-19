@@ -3,8 +3,8 @@ import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import StickyWindow from "./components/StickyWindow.vue";
 import TaskbarPinned from "./components/TaskbarPinned.vue";
 import PopupList from "./components/PopupList.vue";
-import TrashView from "./components/TrashView.vue";
 import { useConfigStore } from "./stores/configStore";
+import { useTaskStore } from "./stores/taskStore";
 
 function getRoute() {
   const hash = window.location.hash.replace(/^#\/?/, "");
@@ -13,6 +13,7 @@ function getRoute() {
 
 const route = ref(getRoute());
 const configStore = useConfigStore();
+const taskStore = useTaskStore();
 
 function updateRoute() {
   route.value = getRoute();
@@ -20,7 +21,7 @@ function updateRoute() {
 
 onMounted(async () => {
   window.addEventListener("hashchange", updateRoute);
-  await configStore.load();
+  await Promise.all([configStore.load(), taskStore.load()]);
 });
 
 watch(() => configStore.config.general.fontFamily, (font) => {
@@ -34,5 +35,4 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
   <StickyWindow v-if="route === 'sticky'" />
   <TaskbarPinned v-else-if="route === 'taskbar'" />
   <PopupList v-else-if="route === 'popup'" />
-  <TrashView v-else-if="route === 'trash'" />
 </template>

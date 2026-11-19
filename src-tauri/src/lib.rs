@@ -64,7 +64,7 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
         };
         let end = end.with_timezone(&Utc);
         if due_within_window(end, now, config.notification.reminder_hours) {
-            due.push((task.id.clone(), task.title.clone(), end));
+            due.push((task.id.clone(), task.title.clone(), raw.to_string(), end));
         }
     }
     if due.is_empty() {
@@ -74,7 +74,7 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
     let mut lines: Vec<String> = due
         .iter()
         .take(5)
-        .map(|(_, title, end)| {
+        .map(|(_, title, _, end)| {
             let seconds = (*end - now).num_seconds();
             let remaining = if seconds <= 0 {
                 "已到期".to_string()
@@ -101,17 +101,17 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
 
     let notified_at = models::now_utc();
     let count = due.len();
-    store.with_data_mut(|data| {
-        for (id, _, _) in &due {
-            if let Some(task) = data.tasks.iter_mut().find(|task| task.id == *id) {
+    store.mutate(|data| {
+        for (id, _, date, _) in &due {
+            if let Some(task) = data.tasks.iter_mut().find(|task| {
+                task.id == *id && task.due_date.as_ref() == Some(date) && task.notified_at.is_none()
+            }) {
                 task.notified_at = Some(notified_at.clone());
             }
         }
-    });
-    let _ = app.emit(
-        "notification:sent",
-        serde_json::json!({ "count": count, "notifiedAt": notified_at }),
-    );
+        Ok(())
+    })?;
+    commands::emit_data_changed(app);
     Ok(count)
 }
 
@@ -157,7 +157,7 @@ fn set_always_on_top(app: AppHandle, label: String, on: bool) {
 
 #[tauri::command]
 fn set_opacity(app: AppHandle, label: String, opacity: i32) {
-    let o = (opacity.max(20).min(100)) as f64 / 100.0;
+    let o = f64::from(opacity.clamp(20, 100)) / 100.0;
     if let Some(w) = app.get_webview_window(&label) {
         #[cfg(target_os = "windows")]
         {
@@ -230,8 +230,12 @@ fn sync_taskbar_window(app: &AppHandle, store: &Store) -> Result<bool, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let (w, h) = (320i32, 96i32);
-        let (x, y) = taskbar::taskbar_anchor(&config.taskbar.position, w, h);
+        let size = win.outer_size().map_err(|err| err.to_string())?;
+        let (x, y) = taskbar::taskbar_anchor(
+            &config.taskbar.position,
+            size.width as i32,
+            size.height as i32,
+        );
         win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
             .map_err(|e| e.to_string())?;
         win.show().map_err(|e| e.to_string())?;
@@ -247,17 +251,82 @@ fn sync_taskbar(app: AppHandle, store: tauri::State<'_, Store>) -> Result<bool, 
 #[tauri::command]
 fn show_popup(app: AppHandle) {
     if let Some(p) = app.get_webview_window("popup") {
-        if let Some(sticky) = app.get_webview_window("sticky") {
-            if let Ok(pos) = sticky.outer_position() {
-                let _ = p.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x: pos.x,
-                    y: pos.y,
-                }));
+        if let Some(anchor) = app
+            .get_webview_window("taskbar")
+            .filter(|window| window.is_visible().unwrap_or(false))
+            .or_else(|| app.get_webview_window("sticky"))
+        {
+            if let (Ok(position), Ok(size), Ok(Some(monitor))) = (
+                anchor.outer_position(),
+                p.outer_size(),
+                anchor.current_monitor(),
+            ) {
+                let area = monitor.work_area();
+                let min_x = area.position.x;
+                let min_y = area.position.y;
+                let max_x = min_x + (area.size.width as i32 - size.width as i32).max(0);
+                let max_y = min_y + (area.size.height as i32 - size.height as i32).max(0);
+                let y = if anchor.label() == "taskbar" {
+                    position.y - size.height as i32
+                } else {
+                    position.y
+                };
+                let _ = p.set_position(tauri::PhysicalPosition::new(
+                    position.x.clamp(min_x, max_x),
+                    y.clamp(min_y, max_y),
+                ));
             }
         }
         let _ = p.show();
         let _ = p.set_focus();
     }
+}
+
+#[tauri::command]
+fn show_sticky(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("sticky") {
+        let _ = app.emit_to("sticky", "sticky:expand", ());
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+#[tauri::command]
+fn set_sticky_collapsed(
+    app: AppHandle,
+    store: tauri::State<'_, Store>,
+    collapsed: bool,
+) -> Result<(), String> {
+    let window = app.get_webview_window("sticky").ok_or("便签窗口不存在")?;
+    let config = store.config();
+    let position = window.outer_position().map_err(|err| err.to_string())?;
+    let scale = window.scale_factor().map_err(|err| err.to_string())?;
+    let offset = |full: i32, compact: i32| ((full - compact) as f64 * scale).round() as i32;
+    let dx = offset(360, 200);
+    let dy = offset(480, 36);
+    let (width, height, x, y, opacity) = if collapsed {
+        (200.0, 36.0, position.x + dx, position.y + dy, 0.30)
+    } else {
+        (
+            360.0,
+            480.0,
+            position.x - dx,
+            position.y - dy,
+            f64::from(config.window.opacity.clamp(20, 100)) / 100.0,
+        )
+    };
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|err| err.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|err| err.to_string())?;
+    window
+        .set_always_on_top(collapsed || config.window.always_on_top)
+        .map_err(|err| err.to_string())?;
+    #[cfg(target_os = "windows")]
+    set_win_opacity(&window, opacity)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -309,37 +378,39 @@ fn list_system_fonts() -> Vec<String> {
 
 // ---------- 应用启动 ----------
 
-fn diag(msg: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    let line = format!("[JTD] {}\n", msg);
-    let _ = eprint!("{}", line);
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("G:\\office\\product\\JustToDo\\.omc\\jtd-run.log")
-    {
-        let _ = f.write_all(line.as_bytes());
-        let _ = f.flush();
+fn show_startup_error(error: &str) {
+    eprintln!("JustToDo 无法启动：{error}");
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::core::{w, HSTRING};
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let message = HSTRING::from(format!(
+            "无法读取或保存应用数据。现有文件已保留。\n\n{error}"
+        ));
+        MessageBoxW(
+            None,
+            &message,
+            w!("JustToDo 无法启动"),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 
 pub fn run() {
-    diag("run() start");
-    // 单实例检查
-    if let None = SingleInstance::acquire() {
-        // 已有实例：直接退出（理想情况下聚焦已有窗口，此处简化）
-        eprintln!("JustToDo 已在运行，退出重复实例。");
-        std::process::exit(0);
+    let dir = storage::data_dir();
+    let _instance = match SingleInstance::acquire(&dir) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => return show_startup_error(&error),
+    };
+    let store = match Store::open(dir) {
+        Ok(store) => store,
+        Err(error) => return show_startup_error(&error),
+    };
+    if let Err(error) = commands::purge_expired_trash(&store) {
+        eprintln!("回收站清理失败：{error}");
     }
-    diag("single-instance acquired");
-
-    let store = Store::new();
-    diag("store created");
-    commands::purge_expired_trash(&store);
-    diag("trash purged");
     let cfg = store.config();
-    diag("config loaded");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -352,10 +423,17 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(store)
         .setup(move |app| {
-            diag("setup() start");
             // 应用窗口初始透明度
             if let Some(w) = app.get_webview_window("sticky") {
-                diag("sticky window found");
+                if let (Ok(Some(monitor)), Ok(size)) = (w.primary_monitor(), w.outer_size()) {
+                    let work = monitor.work_area();
+                    let margin = (20.0 * monitor.scale_factor()).round() as i32;
+                    let x = work.position.x
+                        + (work.size.width as i32 - size.width as i32 - margin).max(0);
+                    let y = work.position.y + margin;
+                    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+                }
+                let _ = w.set_always_on_top(cfg.window.always_on_top);
                 #[cfg(target_os = "windows")]
                 {
                     let _ = set_win_opacity(&w, cfg.window.opacity as f64 / 100.0);
@@ -363,13 +441,10 @@ pub fn run() {
                     // Shell has registered the visible top-level window.
                     let _ = remove_taskbar_button(&w);
                 }
-            } else {
-                diag("!! sticky window NOT found after launch");
             }
             let _ = sync_taskbar_window(app.handle(), &app.state::<Store>());
             // 钉住条定位
             // 托盘
-            diag("building tray");
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let today = MenuItem::with_id(app, "today", "今日要务", true, None::<&str>)?;
@@ -377,29 +452,43 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
+                .show_menu_on_left_click(false)
                 .tooltip("JustToDo")
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(
+                        event,
+                        tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        }
+                    ) {
+                        show_sticky(tray.app_handle().clone());
+                    }
+                })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "show" => {
-                        if let Some(w) = app.get_webview_window("sticky") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        show_sticky(app.clone());
                     }
                     "today" => show_popup(app.clone()),
                     _ => {}
                 })
                 .build(app)?;
-            diag("setup() done, returning Ok");
             let scheduler_app = app.handle().clone();
-            let _ = check_due_notifications(&scheduler_app, &app.state::<Store>());
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(3600));
                 let _ = check_due_notifications(&scheduler_app, &scheduler_app.state::<Store>());
+                std::thread::sleep(std::time::Duration::from_secs(60));
             });
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(window.label(), "sticky" | "popup") {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
             #[cfg(target_os = "windows")]
             if window.label() == "sticky" && matches!(event, tauri::WindowEvent::Focused(true)) {
                 // Reapply after startup and after tray-based restoration without
@@ -410,8 +499,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_tasks,
-            commands::get_tabs_and_categories,
+            commands::get_app_data,
             commands::get_config,
             commands::set_config,
             commands::send_test_notification,
@@ -424,17 +512,16 @@ pub fn run() {
             commands::create_tab,
             commands::rename_tab,
             commands::delete_tab,
-            commands::get_trashed_tasks,
-            commands::get_task_history,
             commands::purge_task,
             set_always_on_top,
             set_opacity,
             sync_taskbar,
             show_popup,
+            show_sticky,
+            set_sticky_collapsed,
             hide_window,
             list_system_fonts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running JustToDo");
-    diag("run() returning (event loop exited)");
 }

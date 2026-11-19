@@ -1,88 +1,44 @@
 import { defineStore } from "pinia";
+import { ref } from "vue";
 import type { Config } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
+import { syncSnapshot } from "@/utils/snapshot";
 
 const DEFAULT_CONFIG: Config = {
-  window: {
-    x: 0,
-    y: 20,
-    width: 360,
-    height: 480,
-    alwaysOnTop: false,
-    opacity: 100,
-    autoHide: false,
-    autoHideDelay: 30,
-  },
-  taskbar: {
-    enabled: false,
-    position: "right",
-    visibleCount: 3,
-    title: "📌 今日要务",
-  },
-  notification: {
-    enabled: true,
-    reminderHours: 1,
-    reminderType: "1hour",
-    soundEnabled: true,
-  },
+  window: { x: 0, y: 20, width: 360, height: 480, alwaysOnTop: false, opacity: 100, autoHide: false, autoHideDelay: 30 },
+  taskbar: { enabled: true, position: "right", visibleCount: 3, title: "📌 今日要务" },
+  notification: { enabled: true, reminderHours: 1, reminderType: "1hour", soundEnabled: true },
   general: {
-    launchOnStartup: false,
-    singleInstance: true,
-    fontFamily: "Microsoft YaHei",
+    launchOnStartup: false, singleInstance: true, fontFamily: "Microsoft YaHei",
     shortcuts: { newTask: "Ctrl+N", newTab: "Ctrl+Shift+T", search: "Ctrl+F", showWindow: "Ctrl+Shift+Space" },
   },
   theme: "light",
-  version: "0.0.2",
+  version: "",
 };
 
-function legacyReminderHours(value: string | undefined): number {
-  switch (value) {
-    case "today": return 24;
-    case "tomorrow": return 48;
-    case "custom": return 1;
-    case "1hour": return 1;
-    default: return 1;
-  }
-}
+export const useConfigStore = defineStore("config", () => {
+  const config = ref(DEFAULT_CONFIG);
+  const error = ref("");
+  const { load, refresh } = syncSnapshot("config:changed", async () => {
+    config.value = await invoke<Config>("get_config");
+    error.value = "";
+  }, (err) => { error.value = "无法读取设置：" + String(err); });
+  let saving = Promise.resolve();
 
-export const useConfigStore = defineStore("config", {
-  state: () => ({
-    config: DEFAULT_CONFIG,
-    loaded: false,
-  }),
-  actions: {
-    async load() {
+  function update(patch: (current: Config) => Partial<Config>) {
+    const next = saving.then(async () => {
       try {
-        const cfg = await invoke<Config>("get_config");
-        this.config = {
-          ...DEFAULT_CONFIG,
-          ...cfg,
-          general: { ...DEFAULT_CONFIG.general, ...cfg.general, shortcuts: { ...DEFAULT_CONFIG.general.shortcuts, ...(cfg.general?.shortcuts ?? {}) } },
-          taskbar: { ...DEFAULT_CONFIG.taskbar, ...cfg.taskbar },
-          notification: {
-            ...DEFAULT_CONFIG.notification,
-            ...cfg.notification,
-            reminderHours: Math.max(0, Math.min(168, Number(cfg.notification?.reminderHours ?? legacyReminderHours(cfg.notification?.reminderType)))),
-          },
-        };
-        if (!cfg.general?.fontFamily || cfg.general.fontFamily === "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif") {
-          this.config.general.fontFamily = DEFAULT_CONFIG.general.fontFamily;
-        }
-      } catch {
-        this.config = DEFAULT_CONFIG;
+        await invoke("set_config", { config: { ...config.value, ...patch(config.value) } });
+        await refresh();
+        return true;
+      } catch (err) {
+        error.value = "无法保存设置：" + String(err);
+        return false;
       }
-      this.loaded = true;
-    },
-    async save() {
-      try {
-        await invoke("set_config", { config: this.config });
-      } catch (e) {
-        console.error("save config failed", e);
-      }
-    },
-    async update(patch: Partial<Config>) {
-      this.config = { ...this.config, ...patch };
-      await this.save();
-    },
-  },
+    });
+    saving = next.then(() => undefined);
+    return next;
+  }
+
+  return { config, error, load, update };
 });

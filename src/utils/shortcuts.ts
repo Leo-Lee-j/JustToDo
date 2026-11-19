@@ -1,16 +1,14 @@
-// JustToDo 应用级快捷键：窗口内 keydown 监听
-// 全局快捷键（任意应用聚焦触发）需 tauri-plugin-global-shortcut，MVP 暂用窗口内监听。
-
 import type { ShortcutConfig } from "@/types";
 
 export interface ShortcutHandlers {
   newTask?: () => void;
   newTab?: () => void;
   search?: () => void;
+  showWindow?: () => void;
   switchTab?: (n: number) => void;
 }
 
-function eventKey(e: KeyboardEvent): string {
+export function eventKey(e: KeyboardEvent): string {
   const parts: string[] = [];
   if (e.ctrlKey) parts.push("Ctrl");
   if (e.metaKey) parts.push("Meta");
@@ -21,27 +19,24 @@ function eventKey(e: KeyboardEvent): string {
   return parts.join("+");
 }
 
-function matches(e: KeyboardEvent, binding: string): boolean {
-  return Boolean(binding.trim()) && eventKey(e).toLowerCase() === binding.trim().toLowerCase();
+export function shortcutConflict(binding: string, bindings: ShortcutConfig, field: keyof ShortcutConfig): boolean {
+  const normalized = binding.trim().toLowerCase();
+  return /^(ctrl|meta)[+][1-9]$/.test(normalized) || Object.entries(bindings).some(([key, value]) =>
+    key !== field && value.trim().toLowerCase() === normalized);
 }
 
-export function installWindowShortcuts(handlers: ShortcutHandlers, bindings?: ShortcutConfig): () => void {
-  const keys = bindings ?? { newTask: "Ctrl+N", newTab: "Ctrl+Shift+T", search: "Ctrl+F" };
+export function installWindowShortcuts(handlers: ShortcutHandlers, bindings: ShortcutConfig): () => void {
   const onKey = (e: KeyboardEvent) => {
-    if (matches(e, keys.newTask)) {
-      if (!handlers.newTask) return;
+    if (e.defaultPrevented || e.isComposing || e.repeat) return;
+    const key = eventKey(e).toLowerCase();
+    for (const action of ["newTask", "newTab", "search", "showWindow"] as const) {
+      const handler = handlers[action];
+      if (!handler || key !== bindings[action].trim().toLowerCase()) continue;
       e.preventDefault();
-      handlers.newTask?.();
-    } else if (matches(e, keys.newTab)) {
-      if (!handlers.newTab) return;
-      e.preventDefault();
-      handlers.newTab?.();
-    } else if (matches(e, keys.search)) {
-      if (!handlers.search) return;
-      e.preventDefault();
-      handlers.search?.();
+      handler();
+      return;
     }
-    if (handlers.switchTab && (e.ctrlKey || e.metaKey) && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+    if (handlers.switchTab && /^(ctrl|meta)[+][1-9]$/.test(key)) {
       e.preventDefault();
       handlers.switchTab(parseInt(e.key, 10));
     }

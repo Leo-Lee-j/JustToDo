@@ -117,22 +117,5 @@ export interface AppData {
   tasks: Task[];
   tabs: Tab[];
   categories: Category[];
-}
-
-// 跨窗口事件 payload
-export interface TaskEventPayload {
-  task: Task;
-}
-
-export interface TaskDeletedPayload {
-  id: string;
-  deletedAt: string | null;
-}
-
-export interface TabChangedPayload {
-  tabs: Tab[];
-}
-
-export interface ConfigChangedPayload {
-  config: Config;
+  history: TaskHistoryEntry[];
 }

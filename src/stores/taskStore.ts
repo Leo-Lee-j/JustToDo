@@ -1,103 +1,78 @@
 import { defineStore } from "pinia";
-import type { Task, TaskHistoryEntry, TaskStatus } from "@/types";
+import { computed, ref } from "vue";
+import type { AppData, Task, TaskStatus } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "./configStore";
+import { syncSnapshot } from "@/utils/snapshot";
 
-export const useTaskStore = defineStore("task", {
-  state: () => ({
-    tasks: [] as Task[],
-    activeTabId: "" as string,
-    loaded: false,
-    history: [] as TaskHistoryEntry[],
-  }),
-  getters: {
-    activeTasks(state): Task[] {
-      return state.tasks
-        .filter((t) => t.tabId === state.activeTabId && !t.deletedAt)
-        .sort((a, b) => a.order - b.order);
-    },
-    topPriorityTasks(state): Task[] {
-      const cfg = useConfigStore();
-      const n = cfg.config.taskbar.visibleCount;
-      return [...state.tasks]
-        .filter((t) => !t.deletedAt && t.status !== "done" && t.status !== "cancelled")
-        .sort((a, b) => {
-          if (a.priority !== b.priority) return a.priority - b.priority;
-          const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-          const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-          if (ad !== bd) return ad - bd;
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        })
-        .slice(0, n);
-    },
-  },
-  actions: {
-    async refreshHistory() {
-      this.history = await invoke<TaskHistoryEntry[]>("get_task_history");
-    },
-    async load() {
-      this.tasks = await invoke<Task[]>("get_tasks");
-      await this.refreshHistory();
-      this.loaded = true;
-      this.subscribe();
-    },
-    subscribe() {
-      listen<{ task: Task }>("task:created", (e) => {
-        if (!this.tasks.find((t) => t.id === e.payload.task.id))
-          this.tasks.push(e.payload.task);
-      });
-      listen<{ task: Task }>("task:updated", (e) => {
-        const i = this.tasks.findIndex((t) => t.id === e.payload.task.id);
-        if (i >= 0) this.tasks[i] = e.payload.task;
-      });
-      listen<{ id: string; deletedAt: string | null }>("task:deleted", (e) => {
-        const t = this.tasks.find((t) => t.id === e.payload.id);
-        if (t) t.deletedAt = e.payload.deletedAt;
-      });
-      listen<{ id: string }>("task:restored", (e) => {
-        const t = this.tasks.find((t) => t.id === e.payload.id);
-        if (t) t.deletedAt = null;
-      });
-    },
-    async create(title: string, tabId: string, dueDate: string | null = null) {
-      const task = await invoke<Task>("create_task", { title, tabId, dueDate });
-      if (!this.tasks.some((item) => item.id === task.id)) this.tasks.push(task);
-      await this.refreshHistory();
-      return task;
-    },
-    async update(id: string, patch: Partial<Task>) {
-      const idx = this.tasks.findIndex((t) => t.id === id);
-      if (idx < 0) return;
-      const current = this.tasks[idx];
-      const updated = await invoke<Task>("update_task", {
-        id,
-        patch,
-        clientUpdatedAt: current.updatedAt,
-      });
-      this.tasks[idx] = updated;
-      await this.refreshHistory();
-    },
-    async setStatus(id: string, status: TaskStatus) {
-      await this.update(id, { status });
-    },
-    async setPriority(id: string, priority: number) {
-      await this.update(id, { priority });
-    },
-    async reorder(orderedIds: string[]) {
-      orderedIds.forEach((id, order) => {
-        const t = this.tasks.find((x) => x.id === id);
-        if (t) t.order = order;
-      });
-      await invoke("reorder_tasks", { tabId: this.activeTabId, orderedIds });
-    },
-    async softDelete(id: string) {
-      await invoke("delete_task", { id });
-      await this.refreshHistory();
-    },
-    async restore(id: string) {
-      await invoke("restore_task", { id });
-      await this.refreshHistory();
-    },
-  },
+function dueTimestamp(task: Task) {
+  const date = Date.parse(task.dueDate ?? "");
+  return Number.isNaN(date) ? Infinity : date;
+}
+
+export const useTaskStore = defineStore("task", () => {
+  const configStore = useConfigStore();
+  const data = ref<AppData>({ tasks: [], tabs: [], categories: [], history: [] });
+  const loadError = ref("");
+  const recentDelete = ref<{ id: string; title: string }>();
+  let undoTimer: ReturnType<typeof setTimeout> | undefined;
+  const { load, refresh } = syncSnapshot("data:changed", async () => {
+    data.value = await invoke<AppData>("get_app_data");
+    loadError.value = "";
+  }, (error) => { loadError.value = "无法读取任务：" + String(error); });
+
+  const tasks = computed(() => data.value.tasks);
+  const history = computed(() => [...data.value.history].reverse());
+  const trashed = computed(() => tasks.value.filter((task) => task.deletedAt)
+    .sort((a, b) => Date.parse(b.deletedAt!) - Date.parse(a.deletedAt!)));
+  const topPriorityTasks = computed(() => tasks.value
+    .filter((task) => !task.deletedAt && task.status !== "done" && task.status !== "cancelled")
+    .sort((a, b) => a.priority - b.priority || dueTimestamp(a) - dueTimestamp(b)
+      || Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, configStore.config.taskbar.visibleCount));
+
+  async function mutate<T>(command: string, args: Record<string, unknown>): Promise<T> {
+    try {
+      return await invoke<T>(command, args);
+    } finally {
+      await refresh();
+    }
+  }
+
+  async function create(title: string, tabId: string, dueDate: string | null, notes: string, priority: number) {
+    const task = await mutate<Task>("create_task", { title, tabId, dueDate, notes, priority });
+    if (dueDate) void invoke("check_notifications").catch(console.error);
+    return task;
+  }
+
+  async function update(id: string, patch: Partial<Task>, clientUpdatedAt?: string) {
+    const current = tasks.value.find((task) => task.id === id);
+    if (!current) throw new Error("任务已不存在");
+    await mutate<Task>("update_task", { id, patch, clientUpdatedAt: clientUpdatedAt ?? current.updatedAt });
+    if ("dueDate" in patch || "status" in patch) void invoke("check_notifications").catch(console.error);
+  }
+
+  async function softDelete(id: string) {
+    const task = tasks.value.find((item) => item.id === id);
+    await mutate<void>("delete_task", { id });
+    if (!task) return;
+    clearTimeout(undoTimer);
+    recentDelete.value = { id, title: task.title };
+    undoTimer = setTimeout(() => { recentDelete.value = undefined; }, 5000);
+  }
+
+  async function restore(id: string) {
+    const task = await mutate<Task>("restore_task", { id });
+    if (recentDelete.value?.id === id) recentDelete.value = undefined;
+    return task;
+  }
+
+  return {
+    data, tasks, history, trashed, topPriorityTasks, loadError, recentDelete, load, mutate, create, update,
+    setStatus: (id: string, status: TaskStatus) => update(id, { status }),
+    setPriority: (id: string, priority: number) => update(id, { priority }),
+    reorder: (tabId: string, orderedIds: string[]) => mutate<void>("reorder_tasks", { tabId, orderedIds }),
+    softDelete, restore,
+    purge: (id: string) => mutate<void>("purge_task", { id }),
+  };
 });

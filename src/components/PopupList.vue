@@ -1,106 +1,58 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useTaskStore } from "@/stores/taskStore";
-import { useTabStore } from "@/stores/tabStore";
+import { useConfigStore } from "@/stores/configStore";
+import { installWindowShortcuts } from "@/utils/shortcuts";
 import TaskItem from "./TaskItem.vue";
-import type { Task } from "@/types";
+import TrashView from "./TrashView.vue";
+import UndoDelete from "./UndoDelete.vue";
 
 const taskStore = useTaskStore();
-const tabStore = useTabStore();
+const configStore = useConfigStore();
 const keyword = ref("");
 const showTrash = ref(false);
-const trashed = ref<Task[]>([]);
-
+const searchInput = ref<HTMLInputElement>();
 const filtered = computed(() => {
-  const k = keyword.value.trim().toLowerCase();
-  let list = taskStore.tasks.filter((t) => !t.deletedAt);
-  if (k) list = list.filter((t) => t.title.toLowerCase().includes(k));
-  return list.sort((a, b) => a.order - b.order);
+  const query = keyword.value.trim().toLowerCase();
+  return taskStore.tasks.filter((task) => !task.deletedAt &&
+    (task.title.toLowerCase().includes(query) || task.notes.toLowerCase().includes(query)))
+    .sort((a, b) => a.order - b.order);
 });
 
-onMounted(async () => {
-  await tabStore.load();
-  await taskStore.load();
-});
+watch(() => configStore.config.general.shortcuts, (keys, _, onCleanup) => {
+  onCleanup(installWindowShortcuts({
+    search: () => { showTrash.value = false; searchInput.value?.focus(); },
+    showWindow: () => void invoke("show_sticky").catch(console.error),
+  }, keys));
+}, { immediate: true });
 
-async function toggleTrash() {
-  showTrash.value = !showTrash.value;
-  if (showTrash.value) trashed.value = await invoke<Task[]>("get_trashed_tasks");
-}
-
-async function restore(id: string) {
-  await invoke("restore_task", { id });
-  trashed.value = trashed.value.filter((task) => task.id !== id);
-}
-
-async function close() {
-  await invoke("hide_window", { label: "popup" });
-}
+function close() { return invoke("hide_window", { label: "popup" }); }
 </script>
 
 <template>
-  <div class="popup">
+  <div class="popup" @keydown.esc="close">
     <header class="popup-head">
-      <input v-model="keyword" placeholder="搜索任务..." class="search" />
-      <button @click="toggleTrash" :class="{ active: showTrash }" title="回收站">🗑</button>
-      <button @click="close" class="close">✕</button>
+      <input ref="searchInput" v-model="keyword" type="search" aria-label="搜索任务" placeholder="搜索标题和备注" class="search" @input="showTrash = false" />
+      <button type="button" :aria-pressed="showTrash" @click="showTrash = !showTrash">回收站</button>
+      <button type="button" aria-label="关闭任务列表" @click="close">✕</button>
     </header>
-    <div class="popup-list">
-      <template v-if="showTrash">
-        <div v-for="t in trashed" :key="t.id" class="trash-row">
-          <span>{{ t.title }}</span><button @click="restore(t.id)">恢复</button>
-        </div>
-        <div v-if="!trashed.length" class="empty">回收站为空</div>
-      </template>
-      <template v-else>
-        <TaskItem v-for="t in filtered" :key="t.id" :task="t" />
-        <div v-if="!filtered.length" class="empty">无匹配任务</div>
-      </template>
+    <p v-if="taskStore.loadError" class="empty" role="alert">{{ taskStore.loadError }}</p>
+    <TrashView v-if="showTrash" />
+    <div v-else class="popup-list">
+      <TaskItem v-for="task in filtered" :key="task.id" :task="task" />
+      <div v-if="!filtered.length" class="empty">无匹配任务</div>
     </div>
+    <UndoDelete />
   </div>
 </template>
 
 <style scoped>
-.popup {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: var(--bg);
-  border-radius: var(--radius);
-  overflow: hidden;
-  border: 1px solid var(--border);
-}
-.popup-head {
-  display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border);
-}
-.search {
-  flex: 1;
-  background: var(--bg-soft);
-  border-radius: 6px;
-  padding: 6px 10px;
-}
-.close {
-  padding: 0 10px;
-  color: var(--text-soft);
-}
-.popup-head button { padding: 0 6px; color: var(--text-soft); }
-.popup-head button.active { color: var(--primary); }
-.trash-row { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
-.trash-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trash-row button { color: var(--primary); }
-.popup-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-.empty {
-  text-align: center;
-  color: var(--text-soft);
-  padding: 30px;
-  font-size: 12px;
-}
+.popup { display:flex; flex-direction:column; height:100vh; background:var(--bg); border-radius:var(--radius); overflow:hidden; border:1px solid var(--border); }
+.popup-head { display:flex; gap:6px; padding:8px; border-bottom:1px solid var(--border); }
+.search { flex:1; min-width:0; background:var(--bg-soft); border-radius:6px; padding:6px 10px; }
+.popup-head button { padding:0 6px; color:var(--text-soft); }
+.popup-head button[aria-pressed=true] { color:var(--primary); text-decoration:underline; }
+.popup-list { flex:1; min-height:0; overflow-y:auto; padding:4px 0; }
+.empty { text-align:center; color:var(--text-soft); padding:20px; font-size:12px; }
 </style>

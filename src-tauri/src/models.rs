@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
     Todo,
@@ -188,13 +188,6 @@ pub struct AppData {
     pub history: Vec<TaskHistoryEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TabsAndCategories {
-    pub tabs: Vec<Tab>,
-    pub categories: Vec<Category>,
-}
-
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -276,6 +269,5 @@ impl Default for AppData {
 }
 
 pub fn now_utc() -> String {
-    use chrono::Utc;
-    Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
 }
