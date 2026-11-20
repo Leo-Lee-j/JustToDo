@@ -1,6 +1,6 @@
 {
   "name": "justtodo",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "A lightweight Windows desktop TODO app with a desktop note",
   "license": "MIT",
   "private": true,

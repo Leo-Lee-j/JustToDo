@@ -15,7 +15,7 @@ JustToDo 是一款轻量、开源的 Windows 待办应用，会在桌面保留�
 
 ## 下载
 
-前往 [GitHub Releases](https://github.com/Leo-Lee-j/JustToDo/releases/latest) 下载最新的 **Windows x64 NSIS 安装包**。需要更新时，手动下载并安装较新的版本。
+前往 [GitHub Releases](https://github.com/Leo-Lee-j/JustToDo/releases/latest) 下载最新的 **Windows x64 NSIS 安装包**。安装后可在「设置 → 关于 JustToDo」点击「检查更新」，发现新版本后点击「安装并重启」。应用会显示下载进度并校验安装包，随后退出应用进行安装，完成后自动重启。也可手动下载并安装新版本。
 
 安装包尚未进行代码签名，Windows 可能会显示安全提示。请只从本仓库的 Releases 页面下载安装包。
 
@@ -35,7 +35,7 @@ pnpm tauri:build
 
 ## 数据与隐私
 
-任务、历史、备份和设置均保存在本机。Windows 默认数据目录为 `%APPDATA%\JustToDo`。JustToDo 不会将数据同步到服务器，请自行备份重要数据。
+任务、历史、备份和设置均保存在本机。Windows 默认数据目录为 `%APPDATA%\JustToDo`。JustToDo 不会将数据同步到服务器；检查更新时会连接 GitHub 获取版本信息和下载安装包，不会上传任务或设置。请自行备份重要数据。
 
 ## 许可证
 

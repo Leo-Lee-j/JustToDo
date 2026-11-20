@@ -15,7 +15,7 @@ JustToDo is a lightweight, open-source Windows to-do app that keeps a small task
 
 ## Download
 
-Download the latest **Windows x64 NSIS installer** from [GitHub Releases](https://github.com/Leo-Lee-j/JustToDo/releases/latest). Install a newer release manually when you want to update.
+Download the latest **Windows x64 NSIS installer** from [GitHub Releases](https://github.com/Leo-Lee-j/JustToDo/releases/latest). In Settings → About JustToDo, choose **Check for updates** (检查更新), then **Install and restart** (安装并重启). The app downloads and verifies the installer before closing; the installer restarts JustToDo after updating. You can also download and install releases manually.
 
 The installer is not code-signed, so Windows may show a security notice. Only download it from this repository's Releases page.
 
@@ -35,7 +35,7 @@ To publish a release, update the version in `package.json`, `src-tauri/Cargo.tom
 
 ## Data and privacy
 
-Tasks, history, backups, and settings are stored locally. On Windows, the default data folder is `%APPDATA%\JustToDo`. JustToDo does not sync your data to a server. Keep your own backups of anything important.
+Tasks, history, backups, and settings are stored locally. On Windows, the default data folder is `%APPDATA%\JustToDo`. JustToDo does not sync your data to a server. Checking for updates contacts GitHub to read release metadata and download the installer; it does not upload your tasks or settings. Keep your own backups of anything important.
 
 ## License
 

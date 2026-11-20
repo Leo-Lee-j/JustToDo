@@ -3,6 +3,7 @@ mod commands;
 mod desktop;
 mod models;
 mod storage;
+mod updates;
 
 use std::sync::{Mutex, OnceLock};
 use storage::{SingleInstance, Store};
@@ -634,6 +635,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_opener::init())
         .manage(store)
+        .manage(updates::UpdateState::default())
         .setup(move |app| {
             // 应用窗口初始透明度
             if let Some(w) = app.get_webview_window("sticky") {
@@ -715,6 +717,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_data,
+            updates::check_app_update,
+            updates::install_app_update,
             commands::get_config,
             commands::set_config,
             commands::send_test_notification,

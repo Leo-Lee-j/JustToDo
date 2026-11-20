@@ -13,9 +13,11 @@ import { eventKey, shortcutConflict } from "@/utils/shortcuts";
 import type { ShortcutConfig } from "@/types";
 import type { Category } from "@/types";
 import { useTabStore } from "@/stores/tabStore";
+import { useUpdateStore } from "@/stores/updateStore";
 
 const configStore = useConfigStore();
 const tabStore = useTabStore();
+const updateStore = useUpdateStore();
 const windowApi = getCurrentWindow();
 const emit = defineEmits<{ close: []; openTrash: [] }>();
 const currentVersion = ref(configStore.config.version);
@@ -354,12 +356,23 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
         <summary>关于 JustToDo</summary>
         <p>一款轻量的 Windows 桌面待办应用，采用 MIT License 开源。</p>
         <div class="about-version">版本 v{{ currentVersion }} · Windows</div>
+        <div class="app-update" :aria-busy="updateStore.busy">
+          <button type="button" class="update-btn" :disabled="updateStore.busy" @click="updateStore.check()">{{ updateStore.phase === 'checking' ? '正在检查…' : '检查更新' }}</button>
+          <p v-if="updateStore.status" class="update-status" role="status">{{ updateStore.status }}</p>
+          <progress v-if="updateStore.phase === 'downloading'" class="update-progress" :value="updateStore.percent" max="100" aria-label="安装包下载进度"></progress>
+          <template v-if="updateStore.update">
+            <p v-if="updateStore.update.notes" class="release-notes">{{ updateStore.update.notes }}</p>
+            <button type="button" class="update-btn" :disabled="updateStore.busy" @click="updateStore.install()">安装并重启</button>
+            <p class="about-update-note">将下载并校验安装包，随后退出应用进行安装，完成后自动重启。</p>
+          </template>
+          <p v-if="updateStore.error" class="update-status" role="alert">{{ updateStore.error }}</p>
+        </div>
         <div class="about-actions">
           <button type="button" class="update-btn" @click="openExternal(repositoryUrl)">GitHub 项目</button>
           <button type="button" class="update-btn" @click="openExternal(repositoryUrl + '/releases')">下载与版本说明</button>
           <button type="button" class="update-btn" @click="openExternal(repositoryUrl + '/blob/main/LICENSE')">MIT License</button>
         </div>
-        <p class="about-update-note">更新时请从 Releases 下载并安装最新版本。</p>
+        <p class="about-update-note">也可前往 Releases 手动下载并安装最新版本。</p>
         <p v-if="aboutStatus" class="update-status" role="alert">{{ aboutStatus }}</p>
       </details>
     </section>
@@ -406,6 +419,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
 .category-edit input[type="color"] { width:26px; height:25px; padding:1px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); }
 .category-edit button:disabled { opacity:.45; }
 .update-btn { width:100%; margin-top:8px; padding:6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
+.update-btn:disabled { opacity:.5; cursor:wait; }
+.app-update { margin:8px 0; }
+.update-progress { width:100%; height:6px; margin-top:8px; accent-color:var(--primary); }
+.release-notes { max-height:120px; overflow-y:auto; white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0; padding:6px; background:var(--bg-soft); color:var(--text-soft); font-size:10px; line-height:1.5; }
+.app-update .about-update-note { margin:6px 0; color:var(--text-soft); line-height:1.5; }
 .update-status { display:block; margin-top:6px; color:var(--text-soft); font-size:10px; }
 .about-card { margin-top:14px; padding:8px; border:1px solid var(--border); border-radius:4px; }
 .about-card summary { cursor:pointer; color:var(--text); font-weight:600; }
