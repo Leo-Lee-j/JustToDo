@@ -14,7 +14,7 @@ import Subtract16 from "@carbon/icons-vue/lib/subtract/16.js";
 import { useTaskStore } from "@/stores/taskStore";
 import { useTabStore } from "@/stores/tabStore";
 import { useConfigStore } from "@/stores/configStore";
-import type { Tab, Task } from "@/types";
+import type { Tab, Task, TaskStatus } from "@/types";
 import TaskItem from "./TaskItem.vue";
 import SettingsWindow from "./SettingsWindow.vue";
 import TrashView from "./TrashView.vue";
@@ -28,6 +28,9 @@ const view = ref<"tasks" | "history" | "trash">("tasks");
 const showSettings = ref(false);
 const showSearch = ref(false);
 const search = ref("");
+const statusFilter = ref<"" | TaskStatus>("");
+const categoryFilter = ref("");
+const priorityFilter = ref("");
 const searchInput = ref<HTMLInputElement>();
 const newTitle = ref("");
 const newNotes = ref("");
@@ -37,7 +40,7 @@ const taskTitleInput = ref<HTMLInputElement>();
 const taskListEl = ref<HTMLElement>();
 const showComposerNotes = ref(false);
 const creatingTask = ref(false);
-const tabEditor = ref<{ id: string | null; name: string }>();
+const tabEditor = ref<{ id: string | null; name: string; color: string; pinned: boolean }>();
 const tabNameInput = ref<HTMLInputElement>();
 const editingTab = ref(false);
 const confirmDeleteTabId = ref<string>();
@@ -51,9 +54,15 @@ const selected = ref(new Set<string>());
 const batchBusy = ref(false);
 const pendingCount = computed(() => taskStore.tasks.filter((task) => !task.deletedAt && (task.status === "todo" || task.status === "doing")).length);
 const activeTasks = computed(() => taskStore.tasks.filter((task) => !task.deletedAt && task.tabId === tabStore.activeTabId).sort((a, b) => a.order - b.order));
+const isTaskFiltered = computed(() => !!search.value.trim() || !!statusFilter.value || !!categoryFilter.value || priorityFilter.value !== "");
 const searchResults = computed(() => {
   const query = search.value.trim().toLowerCase();
-  return query ? taskStore.tasks.filter((task) => !task.deletedAt && (task.title.toLowerCase().includes(query) || task.notes.toLowerCase().includes(query))) : activeTasks.value;
+  const source = query
+    ? taskStore.tasks.filter((task) => !task.deletedAt && (task.title.toLowerCase().includes(query) || task.notes.toLowerCase().includes(query)))
+    : activeTasks.value;
+  return source.filter((task) => (!statusFilter.value || task.status === statusFilter.value)
+    && (!categoryFilter.value || task.categoryId === categoryFilter.value)
+    && (priorityFilter.value === "" || task.priority === Number(priorityFilter.value)));
 });
 const trashedIds = computed(() => new Set(taskStore.trashed.map((task) => task.id)));
 const historyLabels: Record<string, string> = { created: "新增", updated: "更新", deleted: "删除", restored: "恢复" };
@@ -173,7 +182,37 @@ async function applySelection(action: "complete" | "delete") {
   batchBusy.value = false;
 }
 
+function selectedIds() {
+  return searchResults.value.filter(({ id }) => selected.value.has(id)).map(({ id }) => id);
+}
+
+function deleteSelected() {
+  if (!selecting.value || !selectedIds().length || batchBusy.value) return false;
+  void applySelection("delete");
+  return true;
+}
+
+function completeSelected() {
+  if (!selecting.value || !selectedIds().length || batchBusy.value) return false;
+  void applySelection("complete");
+  return true;
+}
+
+function changeSelectedPriority(delta: number) {
+  const ids = selecting.value ? selectedIds() : [];
+  if (!ids.length || batchBusy.value) return false;
+  batchBusy.value = true;
+  void perform(async () => {
+    for (const id of ids) {
+      const task = taskStore.tasks.find((item) => item.id === id && !item.deletedAt);
+      if (task) await taskStore.setPriority(id, Math.max(0, Math.min(4, task.priority + delta)));
+    }
+  }).finally(() => { batchBusy.value = false; });
+  return true;
+}
+
 watch([search, view, showSettings, () => tabStore.activeTabId], exitSelection);
+watch([statusFilter, categoryFilter, priorityFilter], exitSelection);
 
 async function focusSearch() {
   showTasks();
@@ -190,7 +229,7 @@ async function focusNewTask() {
 
 async function openTabEditor(tab?: Tab) {
   showTasks();
-  tabEditor.value = { id: tab?.id ?? null, name: tab?.name ?? "" };
+  tabEditor.value = { id: tab?.id ?? null, name: tab?.name ?? "", color: tab?.color ?? "#4A90D9", pinned: tab?.pinned ?? false };
   await nextTick();
   tabNameInput.value?.focus();
   tabNameInput.value?.select();
@@ -201,7 +240,7 @@ async function saveTab() {
   if (editingTab.value || !editor?.name.trim()) return;
   editingTab.value = true;
   await perform(async () => {
-    if (editor.id) await tabStore.rename(editor.id, editor.name);
+    if (editor.id) await tabStore.update({ id: editor.id, name: editor.name, color: editor.color, pinned: editor.pinned });
     else switchTab((await tabStore.create(editor.name)).id);
     tabEditor.value = undefined;
   });
@@ -232,6 +271,13 @@ async function reorder(tasks: Task[]) {
   if (!tabId || ordering.value || tabId !== tabStore.activeTabId) return;
   ordering.value = true;
   await perform(() => taskStore.reorder(tabId, tasks.map((task) => task.id)));
+  ordering.value = false;
+}
+
+async function reorderTabs(tabs: Tab[]) {
+  if (ordering.value) return;
+  ordering.value = true;
+  await perform(() => tabStore.reorder(tabs.map((tab) => tab.id)));
   ordering.value = false;
 }
 
@@ -280,7 +326,10 @@ async function snapToEdge(movedPosition?: { x: number; y: number }) {
     x = Math.max(snapLeft, Math.min(snapRight, x));
     y = Math.max(snapTop, Math.min(snapBottom, y));
   }
-  if (x === position.x && y === position.y) return;
+  if (x === position.x && y === position.y) {
+    await invoke("move_sticky", { x, y });
+    return;
+  }
   snapping = true;
   try {
     await invoke("move_sticky", { x, y });
@@ -307,6 +356,9 @@ watch(() => configStore.config.general.shortcuts, (bindings, _, onCleanup) => {
       else if (showComposerNotes.value) showComposerNotes.value = false;
     },
     undo: () => taskStore.undoDelete(),
+    deleteSelected,
+    completeSelected,
+    changePriority: changeSelectedPriority,
   }, bindings));
 }, { immediate: true });
 
@@ -360,19 +412,29 @@ onBeforeUnmount(() => {
     <TrashView v-else-if="view === 'trash'" />
     <template v-else>
       <nav class="tabs" aria-label="任务 Tab">
-        <div v-for="tab in tabStore.sortedTabs" :key="tab.id" class="tab" :class="{ active: tab.id === tabStore.activeTabId }" :style="{ borderBottomColor: tab.id === tabStore.activeTabId ? tab.color : 'transparent' }">
-          <button class="tab-label" type="button" :aria-current="tab.id === tabStore.activeTabId" title="双击重命名" @click="switchTab(tab.id)" @dblclick="openTabEditor(tab)">{{ tab.name }}</button>
-          <button v-if="tabStore.tabs.length > 1" class="tab-delete" type="button" :class="{ confirm: confirmDeleteTabId === tab.id }" :title="confirmDeleteTabId === tab.id ? '再次点击将任务移入回收站' : '删除 Tab'" :aria-label="confirmDeleteTabId === tab.id ? '确认删除 Tab' : '删除 Tab'" @click="deleteTab(tab.id)"><component :is="confirmDeleteTabId === tab.id ? TrashCan16 : Close16" /></button>
-        </div>
+        <draggable :model-value="tabStore.sortedTabs" item-key="id" handle=".tab-drag" :animation="120" :disabled="ordering" class="tab-order-list" @update:model-value="reorderTabs">
+          <template #item="{ element: tab }">
+            <div class="tab" :class="{ active: tab.id === tabStore.activeTabId, pinned: tab.pinned }" :style="{ borderBottomColor: tab.id === tabStore.activeTabId ? tab.color : 'transparent' }">
+              <button class="tab-drag" type="button" :aria-label="'拖动排序 ' + tab.name" title="拖动排序">⋮⋮</button>
+              <button class="tab-label" type="button" :aria-current="tab.id === tabStore.activeTabId" title="双击管理 Tab" @click="switchTab(tab.id)" @dblclick="openTabEditor(tab)">{{ tab.pinned ? '📌 ' : '' }}{{ tab.name }}</button>
+              <button v-if="tabStore.tabs.length > 1" class="tab-delete" type="button" :class="{ confirm: confirmDeleteTabId === tab.id }" :title="confirmDeleteTabId === tab.id ? '再次点击将任务移入回收站' : '删除 Tab'" :aria-label="confirmDeleteTabId === tab.id ? '确认删除 Tab' : '删除 Tab'" @click="deleteTab(tab.id)"><component :is="confirmDeleteTabId === tab.id ? TrashCan16 : Close16" /></button>
+            </div>
+          </template>
+        </draggable>
         <button class="new-tab-btn" type="button" aria-label="新建 Tab" title="新建 Tab" @click="openTabEditor()">+</button>
       </nav>
       <form v-if="tabEditor" class="new-tab-form" @submit.prevent="saveTab" @keydown.esc="tabEditor = undefined">
         <input ref="tabNameInput" v-model="tabEditor.name" maxlength="30" aria-label="Tab 名称" placeholder="Tab 名称" required />
+        <input v-model="tabEditor.color" type="color" aria-label="Tab 颜色" title="Tab 颜色" />
+        <label class="pin-tab-toggle"><input v-model="tabEditor.pinned" type="checkbox" />置顶</label>
         <button type="button" @click="tabEditor = undefined">取消</button><button type="submit" :disabled="editingTab">保存</button>
       </form>
       <p v-if="confirmDeleteTabId" class="feedback">再次点击删除可确认，任务将移入回收站。 <button type="button" @click="confirmDeleteTabId = undefined">取消</button></p>
       <div v-if="showSearch" class="search-bar" @keydown.esc="showSearch = false; search = ''">
         <input ref="searchInput" v-model="search" type="search" placeholder="搜索标题和备注" aria-label="搜索任务" />
+        <select v-model="statusFilter" aria-label="按状态筛选"><option value="">全部状态</option><option value="todo">待办</option><option value="doing">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select>
+        <select v-model="categoryFilter" aria-label="按分类筛选"><option value="">全部分类</option><option v-for="category in tabStore.categories" :key="category.id" :value="category.id">{{ category.name }}</option></select>
+        <select v-model="priorityFilter" aria-label="按优先级筛选"><option value="">全部优先级</option><option v-for="priority in [0, 1, 2, 3, 4]" :key="priority" :value="String(priority)">P{{ priority }}</option></select>
         <button type="button" aria-label="关闭搜索" @click="showSearch = false; search = ''"><Close16 /></button>
       </div>
       <div ref="taskListEl" class="list">
@@ -383,11 +445,11 @@ onBeforeUnmount(() => {
           <button type="button" :disabled="batchBusy || !selected.size" @click="applySelection('delete')">删除</button>
           <button type="button" :disabled="batchBusy" @click="exitSelection">退出</button>
         </div>
-        <draggable :model-value="searchResults" item-key="id" handle=".drag-handle" :animation="150" :disabled="ordering || selecting || !!search.trim()" @start="draggingTab = tabStore.activeTabId" @end="draggingTab = undefined" @update:model-value="reorder">
+        <draggable :model-value="searchResults" item-key="id" handle=".drag-handle" :animation="150" :disabled="ordering || selecting || isTaskFiltered" @start="draggingTab = tabStore.activeTabId" @end="draggingTab = undefined" @update:model-value="reorder">
           <template #item="{ element }">
             <div class="task-row" @click="selecting && selectTask(element.id)">
               <input v-if="selecting" type="checkbox" :checked="selected.has(element.id)" :aria-label="'选择 ' + element.title" @click.stop="selectTask(element.id)" />
-              <TaskItem :task="element" :sortable="!search.trim()" :selecting="selecting" @long-press="startSelection(element.id)" />
+              <TaskItem :task="element" :sortable="!isTaskFiltered" :selecting="selecting" @long-press="startSelection(element.id)" />
             </div>
           </template>
         </draggable>
@@ -480,6 +542,7 @@ onBeforeUnmount(() => {
 .tabs::-webkit-scrollbar {
   display: none;
 }
+.tab-order-list { display:flex; flex:0 0 auto; align-items:center; gap:2px; }
 .tab {
   display: flex;
   align-items: center;
@@ -497,7 +560,10 @@ onBeforeUnmount(() => {
 .tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 112px;
 }
+.tab-drag { width:12px; padding:0; color:var(--text-soft); opacity:.5; cursor:grab; font-size:9px; letter-spacing:-3px; }
+.tab-drag:active { cursor:grabbing; }
 .tab-delete {
   display: inline-flex;
   align-items: center;
@@ -546,6 +612,12 @@ onBeforeUnmount(() => {
   background: var(--bg-soft);
   font-size: 12px;
 }
+.new-tab-form input[type="color"] { flex:0 0 30px; width:30px; padding:1px; }
+.new-tab-form .pin-tab-toggle { display:flex; align-items:center; gap:3px; white-space:nowrap; font-size:11px; }
+.new-tab-form .pin-tab-toggle input { width:auto; height:auto; }
+.search-bar { flex-wrap:wrap; }
+.search-bar input { flex:1 1 calc(100% - 34px); }
+.search-bar select { flex:1 1 29%; min-width:0; padding:4px 2px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font:inherit; font-size:10px; }
 .list {
   flex: 1;
   overflow-y: auto;

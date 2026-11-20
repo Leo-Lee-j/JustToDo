@@ -8,6 +8,9 @@ export interface ShortcutHandlers {
   switchTab?: (n: number) => void;
   escape?: () => void;
   undo?: () => boolean;
+  deleteSelected?: () => boolean;
+  completeSelected?: () => boolean;
+  changePriority?: (delta: number) => boolean;
 }
 
 export function eventKey(e: KeyboardEvent): string {
@@ -34,14 +37,31 @@ function isTextEditingTarget(target: EventTarget | null): boolean {
   ) !== null;
 }
 
+function isEditing(event: KeyboardEvent): boolean {
+  return event.composedPath().some(isTextEditingTarget)
+    || isTextEditingTarget(document.activeElement);
+}
+
 export function installWindowShortcuts(handlers: ShortcutHandlers, bindings: ShortcutConfig): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.defaultPrevented || e.isComposing || e.repeat) return;
     const key = eventKey(e).toLowerCase();
     if (/^(ctrl|meta)[+]z$/.test(key)) {
-      const editingText = e.composedPath().some(isTextEditingTarget)
-        || isTextEditingTarget(document.activeElement);
-      if (!editingText && handlers.undo?.()) e.preventDefault();
+      if (!isEditing(e) && handlers.undo?.()) e.preventDefault();
+      return;
+    }
+    if (isEditing(e)) return;
+    if (key === "delete" && handlers.deleteSelected?.()) {
+      e.preventDefault();
+      return;
+    }
+    if (/^(ctrl|meta)[+]enter$/.test(key) && handlers.completeSelected?.()) {
+      e.preventDefault();
+      return;
+    }
+    if (/^(ctrl|meta)[+]arrow(up|down)$/.test(key)
+      && handlers.changePriority?.(key.endsWith("arrowup") ? -1 : 1)) {
+      e.preventDefault();
       return;
     }
     for (const action of ["newTask", "newTab", "search", "showWindow"] as const) {

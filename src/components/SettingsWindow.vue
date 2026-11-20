@@ -12,8 +12,11 @@ import Close16 from "@carbon/icons-vue/lib/close/16.js";
 import { useConfigStore } from "@/stores/configStore";
 import { eventKey, shortcutConflict } from "@/utils/shortcuts";
 import type { ShortcutConfig } from "@/types";
+import type { Category } from "@/types";
+import { useTabStore } from "@/stores/tabStore";
 
 const configStore = useConfigStore();
+const tabStore = useTabStore();
 const windowApi = getCurrentWindow();
 const emit = defineEmits<{ close: []; openTrash: [] }>();
 const currentVersion = ref(configStore.config.version);
@@ -31,6 +34,94 @@ const fontLoading = ref(false);
 const recordingShortcut = ref<keyof ShortcutConfig | null>(null);
 const shortcutError = ref("");
 const notificationStatus = ref("");
+type Backup = { id: string; savedAt: string; activeTasks: number; trashedTasks: number };
+const backups = ref<Backup[]>([]);
+const backupsOpen = ref(false);
+const backupBusy = ref(false);
+const backupId = ref("");
+const confirmBackup = ref(false);
+const backupStatus = ref("");
+const categoryDraft = ref({ id: "", name: "", color: "#9B9B9B" });
+const categoryBusy = ref(false);
+const categoryStatus = ref("");
+const deleteCategoryId = ref("");
+
+async function loadBackups() {
+  backupsOpen.value = true;
+  confirmBackup.value = false;
+  backupBusy.value = true;
+  try {
+    backups.value = await invoke<Backup[]>("list_backups");
+    backupId.value = backups.value[0]?.id ?? "";
+  } catch (error) {
+    backupStatus.value = String(error);
+  } finally {
+    backupBusy.value = false;
+  }
+}
+
+function backupLabel(backup: Backup) {
+  const type = backup.id.startsWith("daily-") ? "每日备份" : backup.id.startsWith("purge-") ? "永久删除前" : "恢复前";
+  return [new Date(backup.savedAt).toLocaleString("zh-CN"), type, backup.activeTasks + " 项任务", backup.trashedTasks + " 项回收站任务"].join(" · ");
+}
+
+async function restoreBackup() {
+  if (!backupId.value || backupBusy.value) return;
+  backupBusy.value = true;
+  confirmBackup.value = false;
+  try {
+    await invoke("restore_backup", { id: backupId.value });
+    backupStatus.value = "任务已恢复；恢复前的当前数据也已备份。";
+    backups.value = await invoke<Backup[]>("list_backups");
+  } catch (error) {
+    backupStatus.value = String(error);
+  } finally {
+    backupBusy.value = false;
+  }
+}
+
+function editCategory(category: Category) {
+  deleteCategoryId.value = "";
+  categoryDraft.value = { id: category.id, name: category.name, color: category.color };
+}
+
+async function saveCategory() {
+  if (categoryBusy.value || !categoryDraft.value.name.trim()) return;
+  categoryBusy.value = true;
+  categoryStatus.value = "";
+  try {
+    if (categoryDraft.value.id) {
+      await tabStore.updateCategory(categoryDraft.value.id, categoryDraft.value.name, categoryDraft.value.color);
+    } else {
+      await tabStore.createCategory(categoryDraft.value.name, categoryDraft.value.color);
+    }
+    categoryDraft.value = { id: "", name: "", color: "#9B9B9B" };
+  } catch (error) {
+    categoryStatus.value = String(error);
+  } finally {
+    categoryBusy.value = false;
+  }
+}
+
+async function removeCategory(category: Category) {
+  if (categoryBusy.value) return;
+  if (deleteCategoryId.value !== category.id) {
+    deleteCategoryId.value = category.id;
+    categoryStatus.value = "再次点击将删除“" + category.name + "”，所属任务会改用其他分类。";
+    return;
+  }
+  categoryBusy.value = true;
+  try {
+    await tabStore.removeCategory(category.id);
+    deleteCategoryId.value = "";
+    if (categoryDraft.value.id === category.id) categoryDraft.value = { id: "", name: "", color: "#9B9B9B" };
+    categoryStatus.value = "分类已删除；关联任务已转到其他分类。";
+  } catch (error) {
+    categoryStatus.value = String(error);
+  } finally {
+    categoryBusy.value = false;
+  }
+}
 const fallbackFonts = ["Microsoft YaHei", "Arial", "Segoe UI", "sans-serif", "serif", "monospace"];
 let pendingUpdate: Awaited<ReturnType<typeof check>> = null;
 
@@ -291,6 +382,22 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
         <option value="gesture">仅手势</option>
         <option value="both">复选框 + 手势</option>
       </select>
+      <details class="category-manager">
+        <summary>管理任务分类（{{ tabStore.categories.length }}）</summary>
+        <div v-for="category in tabStore.categories" :key="category.id" class="category-row">
+          <span class="category-swatch" :style="{ backgroundColor: category.color }"></span>
+          <span class="category-name">{{ category.name }}</span>
+          <button type="button" @click="editCategory(category)">编辑</button>
+          <button type="button" :class="{ confirm: deleteCategoryId === category.id }" :disabled="tabStore.categories.length <= 1 || categoryBusy" @click="removeCategory(category)">{{ deleteCategoryId === category.id ? '确认删' : '删除' }}</button>
+        </div>
+        <form class="category-edit" @submit.prevent="saveCategory">
+          <input v-model="categoryDraft.name" maxlength="30" :placeholder="categoryDraft.id ? '分类名称' : '新增分类名称'" aria-label="分类名称" required />
+          <input v-model="categoryDraft.color" type="color" aria-label="分类颜色" title="分类颜色" />
+          <button type="submit" :disabled="categoryBusy">{{ categoryDraft.id ? '保存修改' : '新增' }}</button>
+          <button v-if="categoryDraft.id" type="button" @click="categoryDraft = { id: '', name: '', color: '#9B9B9B' }">取消</button>
+        </form>
+        <p v-if="categoryStatus" class="update-status" role="status">{{ categoryStatus }}</p>
+      </details>
       <label class="settings-check"><input type="checkbox" :checked="configStore.config.general.launchOnStartup" @change="setLaunchOnStartup(($event.target as HTMLInputElement).checked)" /> 开机自启动</label>
       <label class="settings-label">快捷键</label>
       <div class="shortcut-list">
@@ -309,6 +416,19 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
       <div class="notification-actions"><span>权限：{{ notificationPermission === "granted" ? "已允许" : notificationPermission === "denied" ? "未允许" : "未知" }}</span><button class="update-btn" @click="testNotification">测试通知</button></div>
       <p v-if="notificationStatus" class="update-status" role="status">{{ notificationStatus }}</p>
       <button class="update-btn" type="button" @click="emit('openTrash')">打开回收站</button>
+      <button class="update-btn" type="button" :aria-expanded="backupsOpen" :disabled="backupBusy" @click="backupsOpen ? backupsOpen = false : loadBackups()">任务备份</button>
+      <div v-if="backupsOpen">
+        <label v-if="backups.length" class="settings-label">选择备份
+          <select v-model="backupId" class="settings-select" :disabled="backupBusy" @change="confirmBackup = false">
+            <option v-for="backup in backups" :key="backup.id" :value="backup.id">{{ backupLabel(backup) }}</option>
+          </select>
+        </label>
+        <p v-else-if="!backupBusy">暂无可用的任务备份</p>
+        <p v-if="confirmBackup">恢复会替换任务、列表、分类和回收站内容；当前数据会先另存为恢复前备份。</p>
+        <button v-if="backupId" class="update-btn" type="button" :disabled="backupBusy" @click="confirmBackup ? restoreBackup() : confirmBackup = true">{{ confirmBackup ? '确认恢复' : '恢复所选备份' }}</button>
+        <button v-if="confirmBackup" class="update-btn" type="button" :disabled="backupBusy" @click="confirmBackup = false">取消</button>
+      </div>
+      <p v-if="backupStatus" class="update-status" role="status">{{ backupStatus }}</p>
       <p v-if="configStore.error" class="update-status" role="alert">{{ configStore.error }}</p>
       <div class="version-label">当前版本 v{{ currentVersion }}</div>
       <button class="update-btn" :disabled="updateBusy" @click="checkForUpdates">{{ updateBusy ? "处理中..." : "检查更新" }}</button>
@@ -359,6 +479,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
 .font-option:hover,.font-option.selected { background:var(--bg-soft); }
 .font-loading,.font-empty { display:block; padding:6px; color:var(--text-soft); font-size:11px; }
 .settings-check { display:flex; align-items:center; gap:6px; margin-top:12px; }
+.category-manager { margin-top:12px; padding:7px; border:1px solid var(--border); border-radius:4px; }
+.category-manager summary { cursor:pointer; color:var(--text); font-weight:600; }
+.category-row { display:flex; align-items:center; gap:5px; margin-top:6px; }
+.category-swatch { width:12px; height:12px; border-radius:50%; flex:0 0 12px; }
+.category-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.category-row button,.category-edit button { padding:4px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:10px; }
+.category-row button.confirm { color:#b42318; border-color:#b42318; }
+.category-edit { display:flex; align-items:center; gap:4px; margin-top:8px; }
+.category-edit input[type="text"],.category-edit input:not([type]) { flex:1; min-width:0; padding:5px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:10px; }
+.category-edit input[type="color"] { width:26px; height:25px; padding:1px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); }
+.category-edit button:disabled { opacity:.45; }
 .version-label { margin-top:14px; color:var(--text-soft); font-size:10px; }
 .update-btn { width:100%; margin-top:8px; padding:6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
 .update-release { margin-top:6px; font-size:11px; }

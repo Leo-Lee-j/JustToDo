@@ -52,6 +52,58 @@ fn valid_date(due_date: Option<String>) -> Result<Option<String>, String> {
     Ok(due_date)
 }
 
+fn valid_color(color: &str) -> Result<String, String> {
+    let valid = color.len() == 7
+        && color.starts_with('#')
+        && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit());
+    valid
+        .then(|| color.to_ascii_uppercase())
+        .ok_or_else(|| "颜色须为六位十六进制色值".into())
+}
+
+fn apply_tab_order(data: &mut AppData, ordered_ids: &[String]) -> Result<(), String> {
+    let ranks: std::collections::HashMap<_, _> = ordered_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index as i32))
+        .collect();
+    if ranks.len() != ordered_ids.len()
+        || ranks.len() != data.tabs.len()
+        || data
+            .tabs
+            .iter()
+            .any(|tab| !ranks.contains_key(tab.id.as_str()))
+    {
+        return Err("Tab 列表已变化，请重新排序".into());
+    }
+    for tab in &mut data.tabs {
+        tab.order = ranks[tab.id.as_str()];
+    }
+    Ok(())
+}
+
+fn delete_category_from_data(data: &mut AppData, id: &str) -> Result<(), String> {
+    if data.categories.len() <= 1 {
+        return Err("至少保留一个分类".into());
+    }
+    if !data.categories.iter().any(|category| category.id == id) {
+        return Err("分类已不存在".into());
+    }
+    let fallback = data
+        .categories
+        .iter()
+        .find(|category| category.id != id)
+        .map(|category| category.id.clone())
+        .ok_or("没有可用的替代分类")?;
+    for task in &mut data.tasks {
+        if task.category_id == id {
+            task.category_id.clone_from(&fallback);
+        }
+    }
+    data.categories.retain(|category| category.id != id);
+    Ok(())
+}
+
 fn next_task_order(data: &AppData, tab_id: &str) -> i32 {
     data.tasks
         .iter()
@@ -192,6 +244,7 @@ fn update_active_task(
         if task.due_date != due_date {
             task.due_date = due_date;
             task.notified_at = None;
+            task.reminder_notified_at = None;
         }
     }
     let mut reminder_changed = false;
@@ -214,6 +267,7 @@ fn update_active_task(
         return Err("请先设置提醒时间".into());
     }
     if reminder_changed {
+        task.notified_at = None;
         task.reminder_notified_at = None;
     }
     if let Some(notes) = patch.get("notes").and_then(|value| value.as_str()) {
@@ -343,6 +397,13 @@ pub fn restore_task(app: AppHandle, store: State<'_, Store>, id: String) -> Resu
 pub fn create_tab(app: AppHandle, store: State<'_, Store>, name: String) -> Result<Tab, String> {
     let name = required_text(&name, 30, "Tab 名称")?;
     save(&app, &store, |data| {
+        if data
+            .tabs
+            .iter()
+            .any(|tab| tab.name.eq_ignore_ascii_case(&name))
+        {
+            return Err("Tab 名称已存在".into());
+        }
         let tab = Tab {
             id: format!("tab-{}", uuid::Uuid::new_v4()),
             name,
@@ -378,6 +439,115 @@ pub fn rename_tab(
         tab.name = name;
         Ok(())
     })
+}
+
+#[tauri::command]
+pub fn update_tab(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: String,
+    name: String,
+    color: String,
+    pinned: bool,
+) -> Result<(), String> {
+    let name = required_text(&name, 30, "Tab 名称")?;
+    let color = valid_color(&color)?;
+    save(&app, &store, |data| {
+        if data
+            .tabs
+            .iter()
+            .any(|tab| tab.id != id && tab.name.eq_ignore_ascii_case(&name))
+        {
+            return Err("Tab 名称已存在".into());
+        }
+        let tab = data
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == id)
+            .ok_or("Tab 已不存在")?;
+        tab.name = name;
+        tab.color = color;
+        tab.pinned = pinned;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn reorder_tabs(
+    app: AppHandle,
+    store: State<'_, Store>,
+    ordered_ids: Vec<String>,
+) -> Result<(), String> {
+    save(&app, &store, |data| apply_tab_order(data, &ordered_ids))
+}
+
+#[tauri::command]
+pub fn create_category(
+    app: AppHandle,
+    store: State<'_, Store>,
+    name: String,
+    color: String,
+) -> Result<Category, String> {
+    let name = required_text(&name, 30, "分类名称")?;
+    let color = valid_color(&color)?;
+    save(&app, &store, |data| {
+        if data
+            .categories
+            .iter()
+            .any(|category| category.name.eq_ignore_ascii_case(&name))
+        {
+            return Err("分类名称已存在".into());
+        }
+        let category = Category {
+            id: format!("cat-{}", uuid::Uuid::new_v4()),
+            name,
+            color,
+            icon: "📝".into(),
+            order: data
+                .categories
+                .iter()
+                .map(|item| item.order)
+                .max()
+                .map_or(0, |order| order.saturating_add(1)),
+            is_built_in: false,
+        };
+        data.categories.push(category.clone());
+        Ok(category)
+    })
+}
+
+#[tauri::command]
+pub fn update_category(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: String,
+    name: String,
+    color: String,
+) -> Result<(), String> {
+    let name = required_text(&name, 30, "分类名称")?;
+    let color = valid_color(&color)?;
+    save(&app, &store, |data| {
+        if data
+            .categories
+            .iter()
+            .any(|category| category.id != id && category.name.eq_ignore_ascii_case(&name))
+        {
+            return Err("分类名称已存在".into());
+        }
+        let category = data
+            .categories
+            .iter_mut()
+            .find(|category| category.id == id)
+            .ok_or("分类已不存在")?;
+        category.name = name;
+        category.color = color;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn delete_category(app: AppHandle, store: State<'_, Store>, id: String) -> Result<(), String> {
+    save(&app, &store, |data| delete_category_from_data(data, &id))
 }
 
 fn delete_tab_and_trash(data: &mut AppData, id: &str) -> Result<(), String> {
@@ -505,6 +675,81 @@ mod tests {
     }
 
     #[test]
+    fn tab_order_rejects_missing_duplicates_and_foreign_ids() {
+        let mut data = AppData::default();
+        for ids in [
+            vec!["tab-today".into()],
+            vec![
+                "tab-today".into(),
+                "tab-today".into(),
+                "tab-work".into(),
+                "tab-life".into(),
+            ],
+            vec!["tab-today".into(), "tab-work".into(), "foreign".into()],
+        ] {
+            assert!(apply_tab_order(&mut data, &ids).is_err());
+        }
+        apply_tab_order(
+            &mut data,
+            &["tab-life".into(), "tab-today".into(), "tab-work".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            data.tabs.iter().min_by_key(|tab| tab.order).unwrap().id,
+            "tab-life"
+        );
+        assert!(
+            data.tabs
+                .iter()
+                .find(|tab| tab.id == "tab-today")
+                .unwrap()
+                .pinned
+        );
+    }
+
+    #[test]
+    fn deleting_a_category_reassigns_all_tasks_and_keeps_one_category() {
+        let mut data = AppData::default();
+        let mut active = task("active", "tab-today", 0);
+        active.category_id = "cat-work".into();
+        let mut trashed = task("trashed", "tab-work", 0);
+        trashed.category_id = "cat-work".into();
+        trashed.deleted_at = Some(now_utc());
+        data.tasks.extend([active, trashed]);
+        delete_category_from_data(&mut data, "cat-work").unwrap();
+        assert!(data
+            .categories
+            .iter()
+            .all(|category| category.id != "cat-work"));
+        assert!(data
+            .tasks
+            .iter()
+            .all(|task| task.category_id == "cat-personal"));
+        let remaining = data.categories[0].id.clone();
+        for id in data
+            .categories
+            .iter()
+            .map(|category| category.id.clone())
+            .collect::<Vec<_>>()
+        {
+            if data.categories.len() == 1 {
+                break;
+            }
+            delete_category_from_data(&mut data, &id).unwrap();
+        }
+        assert_eq!(data.categories.len(), 1);
+        assert!(delete_category_from_data(&mut data, &remaining).is_err());
+    }
+
+    #[test]
+    fn category_color_requires_a_hex_triplet() {
+        assert_eq!(valid_color("#1a2B3c").unwrap(), "#1A2B3C");
+        for color in ["red", "#123", "#12FG34", "#12345678"] {
+            assert!(valid_color(color).is_err());
+        }
+    }
+
+    #[test]
     fn edit_conflicts_are_rejected_and_reopening_clears_completion() {
         let mut data = AppData::default();
         data.tasks.push(task("edit", "tab-today", 0));
@@ -585,7 +830,7 @@ mod tests {
         );
         assert!(updated.reminder_enabled);
         assert!(updated.reminder_notified_at.is_none());
-        assert_eq!(updated.notified_at.as_deref(), Some("due-reminder-sent"));
+        assert!(updated.notified_at.is_none());
 
         assert!(update_active_task(
             &mut data,

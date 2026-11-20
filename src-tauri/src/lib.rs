@@ -37,7 +37,7 @@ fn scheduled_reminder(
     task: &models::Task,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
-    if !task.reminder_enabled || task.reminder_notified_at.is_some() {
+    if !task.reminder_enabled || task.notified_at.is_some() || task.reminder_notified_at.is_some() {
         return None;
     }
     use chrono::DateTime;
@@ -46,12 +46,34 @@ fn scheduled_reminder(
     (reminder <= now).then_some(reminder)
 }
 
+fn due_notification(
+    task: &models::Task,
+    now: chrono::DateTime<chrono::Utc>,
+    hours: i32,
+) -> Option<(String, chrono::DateTime<chrono::Utc>)> {
+    if task.notified_at.is_some()
+        || task.deleted_at.is_some()
+        || !matches!(
+            task.status,
+            models::TaskStatus::Todo | models::TaskStatus::Doing
+        )
+    {
+        return None;
+    }
+    use chrono::DateTime;
+    let raw = task.due_date.as_ref()?;
+    let end = DateTime::parse_from_rfc3339(raw)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    due_within_window(end, now, hours).then(|| (raw.clone(), end))
+}
+
 fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, String> {
     let _check_guard = NOTIFICATION_CHECK_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| "notification lock poisoned".to_string())?;
-    use chrono::{DateTime, Utc};
+    use chrono::Utc;
     use tauri_plugin_notification::NotificationExt;
 
     let config = store.config();
@@ -70,17 +92,8 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
         {
             continue;
         }
-        if task.notified_at.is_none() {
-            if let Some(raw) = task.due_date.as_deref() {
-                if let Ok(end) = DateTime::parse_from_rfc3339(raw) {
-                    let end = end.with_timezone(&Utc);
-                    if due_within_window(end, now, config.notification.reminder_hours) {
-                        due.push((task.id.clone(), task.title.clone(), raw.to_string(), end));
-                    }
-                }
-            }
-        }
-        if let Some(reminder) = scheduled_reminder(task, now) {
+        let scheduled = scheduled_reminder(task, now);
+        if let Some(reminder) = scheduled {
             reminders.push((
                 task.id.clone(),
                 task.title.clone(),
@@ -89,6 +102,13 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
                     .expect("scheduled reminder has a time"),
                 reminder,
             ));
+        }
+        if scheduled.is_none() {
+            if let Some((date, end)) =
+                due_notification(task, now, config.notification.reminder_hours)
+            {
+                due.push((task.id.clone(), task.title.clone(), date, end));
+            }
         }
     }
     if due.is_empty() && reminders.is_empty() {
@@ -142,10 +162,14 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
     let mut builder = app
         .notification()
         .builder()
-        .title("任务提醒")
+        .title("JustToDo 任务提醒")
         .body(lines.join("\n"));
     if config.notification.sound_enabled {
         builder = builder.sound(notification_sound());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.id(1);
     }
     builder.show().map_err(|e| e.to_string())?;
 
@@ -157,6 +181,7 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
                 task.id == *id && task.due_date.as_ref() == Some(date) && task.notified_at.is_none()
             }) {
                 task.notified_at = Some(notified_at.clone());
+                task.reminder_notified_at = Some(notified_at.clone());
             }
         }
         for (id, _, reminder_time, _) in &reminders {
@@ -166,6 +191,7 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
                     && task.reminder_time.as_ref() == Some(reminder_time)
                     && task.reminder_notified_at.is_none()
             }) {
+                task.notified_at = Some(notified_at.clone());
                 task.reminder_notified_at = Some(notified_at.clone());
             }
         }
@@ -177,7 +203,7 @@ fn check_due_notifications(app: &AppHandle, store: &Store) -> Result<usize, Stri
 
 #[cfg(test)]
 mod notification_tests {
-    use super::{due_within_window, scheduled_reminder};
+    use super::{due_notification, due_within_window, scheduled_reminder};
     use crate::models::{Task, TaskStatus};
     use chrono::{DateTime, Duration, Utc};
 
@@ -227,6 +253,16 @@ mod notification_tests {
 
         let task = reminder_task(Some(due.clone()), true, Some(now.to_rfc3339()));
         assert!(scheduled_reminder(&task, now).is_none());
+        let mut task = reminder_task(Some(due.clone()), true, None);
+        task.due_date = Some(due.clone());
+        task.notified_at = Some(now.to_rfc3339());
+        assert!(scheduled_reminder(&task, now).is_none());
+        assert!(due_notification(&task, now, 1).is_none());
+        task.notified_at = None;
+        assert_eq!(
+            due_notification(&task, now, 1).map(|entry| entry.0),
+            Some(due.clone())
+        );
         let task = reminder_task(Some(due), false, None);
         assert!(scheduled_reminder(&task, now).is_none());
     }
@@ -396,14 +432,45 @@ fn set_sticky_collapsed(
 }
 
 #[tauri::command]
-fn move_sticky(app: AppHandle, x: i32, y: i32) -> Result<(), String> {
+fn move_sticky(
+    app: AppHandle,
+    store: tauri::State<'_, Store>,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
     let window = app.get_webview_window("sticky").ok_or("便签窗口不存在")?;
     #[cfg(target_os = "windows")]
-    return desktop::move_to(&window, x, y);
+    desktop::move_to(&window, x, y)?;
     #[cfg(not(target_os = "windows"))]
     window
         .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    store.save_sticky_position(x, y)
+}
+
+fn clamp_saved_position(
+    window: &tauri::webview::WebviewWindow,
+    x: i32,
+    y: i32,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    let size = window.outer_size().ok()?;
+    let monitors = window.available_monitors().ok()?;
+    monitors
+        .into_iter()
+        .map(|monitor| {
+            let area = monitor.work_area();
+            let left = area.position.x;
+            let top = area.position.y;
+            let right = left + (area.size.width as i32 - size.width as i32).max(0);
+            let bottom = top + (area.size.height as i32 - size.height as i32).max(0);
+            let px = x.clamp(left, right);
+            let py = y.clamp(top, bottom);
+            let dx = i64::from(px) - i64::from(x);
+            let dy = i64::from(py) - i64::from(y);
+            (dx * dx + dy * dy, tauri::PhysicalPosition::new(px, py))
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, position)| position)
 }
 
 #[tauri::command]
@@ -478,16 +545,81 @@ fn show_startup_error(error: &str) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn confirm_recovery(recovery: &storage::StartupRecovery) -> bool {
+    use windows::core::{w, HSTRING};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
+    };
+    let message = match recovery {
+        storage::StartupRecovery::Tasks(backup) => {
+            let time = chrono::DateTime::parse_from_rfc3339(&backup.saved_at)
+                .map(|date| date.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|_| backup.saved_at.clone());
+            format!("任务文件无法读取。是否恢复 {time} 的备份（{} 项任务，{} 项在回收站）？\n\n受损文件会保留在 backup 文件夹中。", backup.active_tasks, backup.trashed_tasks)
+        }
+        storage::StartupRecovery::Settings { has_backup: true } =>
+            "设置文件无法读取。是否恢复上一次保存的设置？\n\n受损文件会保留在 backup 文件夹中。".into(),
+        storage::StartupRecovery::Settings { has_backup: false } =>
+            "设置文件无法读取，也没有可用的设置备份。是否使用默认设置继续？\n\n受损文件会保留在 backup 文件夹中。".into(),
+    };
+    unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(message),
+            w!("JustToDo 数据恢复"),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        ) == IDYES
+    }
+}
+
+#[tauri::command]
+fn list_backups(store: tauri::State<'_, Store>) -> Result<Vec<storage::Backup>, String> {
+    store.backups()
+}
+
+#[tauri::command]
+fn restore_backup(
+    app: AppHandle,
+    store: tauri::State<'_, Store>,
+    id: String,
+) -> Result<(), String> {
+    let _guard = NOTIFICATION_CHECK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "提醒服务暂不可用")?;
+    store.restore_backup(&id)?;
+    commands::emit_data_changed(&app);
+    Ok(())
+}
+
 pub fn run() {
     let dir = storage::data_dir();
     let _instance = match SingleInstance::acquire(&dir) {
         Ok(Some(instance)) => instance,
-        Ok(None) => return,
+        Ok(None) => {
+            let _ = storage::request_activation(&dir);
+            return;
+        }
         Err(error) => return show_startup_error(&error),
     };
-    let store = match Store::open(dir) {
-        Ok(store) => store,
-        Err(error) => return show_startup_error(&error),
+    let store = loop {
+        match Store::open(dir.clone()) {
+            Ok(store) => break store,
+            Err(error) => {
+                #[cfg(target_os = "windows")]
+                if let Some(recovery) = storage::startup_recovery(&dir) {
+                    if !confirm_recovery(&recovery) {
+                        return;
+                    }
+                    if let Err(error) = storage::recover_startup(&dir, recovery) {
+                        return show_startup_error(&error);
+                    }
+                    continue;
+                }
+                return show_startup_error(&error);
+            }
+        }
     };
     if let Err(error) = commands::purge_expired_trash(&store) {
         eprintln!("回收站清理失败：{error}");
@@ -507,13 +639,17 @@ pub fn run() {
         .setup(move |app| {
             // 应用窗口初始透明度
             if let Some(w) = app.get_webview_window("sticky") {
+                let restored_position = app.state::<Store>().sticky_position();
                 if let (Ok(Some(monitor)), Ok(size)) = (w.primary_monitor(), w.outer_size()) {
                     let work = monitor.work_area();
                     let margin = (20.0 * monitor.scale_factor()).round() as i32;
                     let x = work.position.x
                         + (work.size.width as i32 - size.width as i32 - margin).max(0);
                     let y = work.position.y + margin;
-                    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+                    let position = restored_position
+                        .and_then(|saved| clamp_saved_position(&w, saved.x, saved.y))
+                        .unwrap_or_else(|| tauri::PhysicalPosition::new(x, y));
+                    let _ = w.set_position(position);
                 }
                 #[cfg(target_os = "windows")]
                 {
@@ -556,6 +692,14 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+            let activation_app = app.handle().clone();
+            let activation_dir = storage::data_dir();
+            std::thread::spawn(move || loop {
+                if storage::take_activation(&activation_dir) {
+                    show_sticky(activation_app.clone());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            });
             let scheduler_app = app.handle().clone();
             std::thread::spawn(move || loop {
                 let _ = check_due_notifications(&scheduler_app, &scheduler_app.state::<Store>());
@@ -584,8 +728,15 @@ pub fn run() {
             commands::restore_task,
             commands::create_tab,
             commands::rename_tab,
+            commands::update_tab,
+            commands::reorder_tabs,
             commands::delete_tab,
+            commands::create_category,
+            commands::update_category,
+            commands::delete_category,
             commands::purge_task,
+            list_backups,
+            restore_backup,
             set_opacity,
             show_sticky,
             set_sticky_collapsed,

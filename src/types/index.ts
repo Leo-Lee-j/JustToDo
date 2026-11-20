@@ -99,6 +99,19 @@ export interface ShortcutConfig {
   showWindow: string;
 }
 
+export interface BackupInfo {
+  id: string;
+  savedAt: string;
+  activeTasks: number;
+  trashedTasks: number;
+}
+
+export interface SearchFilters {
+  status: "" | TaskStatus;
+  categoryId: string;
+  priority: string;
+}
+
 export interface Config {
   window: WindowConfig;
   notification: NotificationConfig;

@@ -17,6 +17,11 @@ export const useTabStore = defineStore("tab", () => {
     setActive: (id: string) => { selectedTab.value = id; },
     create: (name: string) => taskStore.mutate<Tab>("create_tab", { name }),
     rename: (id: string, name: string) => taskStore.mutate<void>("rename_tab", { id, name }),
+    update: (tab: Pick<Tab, "id" | "name" | "color" | "pinned">) => taskStore.mutate<void>("update_tab", tab),
+    reorder: (ids: string[]) => taskStore.mutate<void>("reorder_tabs", { orderedIds: ids }),
+    createCategory: (name: string, color: string) => taskStore.mutate("create_category", { name, color }),
+    updateCategory: (id: string, name: string, color: string) => taskStore.mutate<void>("update_category", { id, name, color }),
+    removeCategory: (id: string) => taskStore.mutate<void>("delete_category", { id }),
     remove: (id: string) => taskStore.mutate<void>("delete_tab", { id }),
   };
 });
