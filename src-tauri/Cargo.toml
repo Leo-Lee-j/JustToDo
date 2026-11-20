@@ -1,9 +1,9 @@
 [package]
 name = "justtodo"
-version = "0.0.7"
-description = "桌面盯人 TODO 软件"
+version = "0.0.8"
+description = "A lightweight Windows desktop TODO app with a desktop note"
 license = "MIT"
-authors = ["JustToDo"]
+authors = ["Leo-Lee-j"]
 edition = "2021"
 rust-version = "1.77"
 
@@ -19,8 +19,6 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

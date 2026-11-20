@@ -16,8 +16,6 @@
     "core:app:default",
     "notification:default",
     "autostart:default",
-    "opener:default",
-    "updater:default",
-    "process:default"
+    "opener:default"
   ]
 }

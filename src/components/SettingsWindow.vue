@@ -2,10 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable as enableAutostart, disable as disableAutostart } from "@tauri-apps/plugin-autostart";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import ChevronDown16 from "@carbon/icons-vue/lib/chevron--down/16.js";
 import Close16 from "@carbon/icons-vue/lib/close/16.js";
@@ -20,12 +19,9 @@ const tabStore = useTabStore();
 const windowApi = getCurrentWindow();
 const emit = defineEmits<{ close: []; openTrash: [] }>();
 const currentVersion = ref(configStore.config.version);
-const availableVersion = ref("");
-const updateNotes = ref("");
-const updateProgress = ref(0);
-const updateStatus = ref("");
-const updateBusy = ref(false);
-const showUpdateConfirmation = ref(false);
+const settingsStatus = ref("");
+const aboutStatus = ref("");
+const repositoryUrl = "https://github.com/Leo-Lee-j/JustToDo";
 const notificationPermission = ref<"granted" | "denied" | "unknown">("unknown");
 const systemFonts = ref<string[]>([]);
 const fontSearch = ref("");
@@ -123,7 +119,6 @@ async function removeCategory(category: Category) {
   }
 }
 const fallbackFonts = ["Microsoft YaHei", "Arial", "Segoe UI", "sans-serif", "serif", "monospace"];
-let pendingUpdate: Awaited<ReturnType<typeof check>> = null;
 
 const filteredFonts = computed(() => {
   const query = fontSearch.value.trim().toLowerCase();
@@ -167,7 +162,7 @@ async function setLaunchOnStartup(enabled: boolean) {
       if (previous) await enableAutostart(); else await disableAutostart();
     }
   } catch {
-    updateStatus.value = "无法修改开机启动设置";
+    settingsStatus.value = "无法修改开机启动设置";
   }
 }
 
@@ -214,88 +209,12 @@ async function testNotification() {
   }
 }
 
-function getUpdateErrorStatus(error: unknown, phase: "check" | "install") {
-  const detail = String(error ?? "");
-  console.error(`update ${phase} failed`, error);
-
-  if (phase === "check") {
-    if (/404|not found|未找到/i.test(detail)) return "更新源暂不可用（尚未发布更新）";
-    if (/fetch|network|connect|网络/i.test(detail)) return "无法连接更新服务，请检查网络";
-    return "检查更新失败，请稍后重试";
-  }
-
-  if (/fetch|network|connect|网络/i.test(detail)) return "下载更新失败，请检查网络";
-  return "更新安装失败，请稍后重试";
-}
-
-async function checkForUpdates() {
-  if (updateBusy.value) return;
-
-  updateBusy.value = true;
-  updateStatus.value = "正在检查更新...";
-  updateProgress.value = 0;
-  availableVersion.value = "";
-  updateNotes.value = "";
-  pendingUpdate = null;
-  showUpdateConfirmation.value = false;
-
+async function openExternal(url: string) {
   try {
-    const update = await check();
-    if (!update) {
-      updateStatus.value = `当前已是最新版本（v${currentVersion.value}）`;
-      return;
-    }
-
-    pendingUpdate = update;
-    availableVersion.value = update.version;
-    updateNotes.value = update.body || "暂无更新说明";
-    updateStatus.value = `发现新版本 v${update.version}`;
-    showUpdateConfirmation.value = true;
+    await openUrl(url);
+    aboutStatus.value = "";
   } catch (error) {
-    updateStatus.value = getUpdateErrorStatus(error, "check");
-  } finally {
-    updateBusy.value = false;
-  }
-}
-
-function postponeUpdate() {
-  if (updateBusy.value) return;
-  showUpdateConfirmation.value = false;
-  pendingUpdate = null;
-  updateStatus.value = `已暂不下载 v${availableVersion.value}`;
-}
-
-async function downloadAndInstallUpdate() {
-  const update = pendingUpdate;
-  if (updateBusy.value || !update) return;
-
-  updateBusy.value = true;
-  showUpdateConfirmation.value = false;
-  updateProgress.value = 0;
-
-  try {
-    let downloaded = 0;
-    let totalBytes = 0;
-    await update.downloadAndInstall((event) => {
-      if (event.event === "Started") {
-        downloaded = 0;
-        totalBytes = event.data.contentLength || 0;
-        updateStatus.value = `正在下载 v${update.version}...`;
-      } else if (event.event === "Progress") {
-        downloaded += event.data.chunkLength;
-        if (totalBytes) updateProgress.value = Math.min(100, Math.round(downloaded / totalBytes * 100));
-      } else if (event.event === "Finished") {
-        updateProgress.value = 100;
-        updateStatus.value = "下载完成，正在重启安装...";
-      }
-    });
-    pendingUpdate = null;
-    await relaunch();
-  } catch (error) {
-    pendingUpdate = null;
-    updateStatus.value = getUpdateErrorStatus(error, "install");
-  } finally {
-    updateBusy.value = false;
+    aboutStatus.value = "无法打开链接：" + String(error);
   }
 }
 
@@ -430,24 +349,20 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
       </div>
       <p v-if="backupStatus" class="update-status" role="status">{{ backupStatus }}</p>
       <p v-if="configStore.error" class="update-status" role="alert">{{ configStore.error }}</p>
-      <div class="version-label">当前版本 v{{ currentVersion }}</div>
-      <button class="update-btn" :disabled="updateBusy" @click="checkForUpdates">{{ updateBusy ? "处理中..." : "检查更新" }}</button>
-      <div v-if="availableVersion" class="update-release">新版本 v{{ availableVersion }}<div class="update-notes">{{ updateNotes }}</div></div>
-      <div v-if="updateBusy && updateProgress > 0" class="update-progress"><span :style="{ width: `${updateProgress}%` }"></span></div>
-      <span v-if="updateStatus" class="update-status">{{ updateStatus }}</span>
-    </section>
-
-    <div v-if="showUpdateConfirmation" class="update-dialog-backdrop">
-      <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-confirmation-title">
-        <strong id="update-confirmation-title">发现新版本 v{{ availableVersion }}</strong>
-        <p>确认后将下载更新，并在重启应用时开始安装。</p>
-        <div class="update-confirm-notes">{{ updateNotes }}</div>
-        <div class="update-dialog-actions">
-          <button class="update-dialog-cancel" @click="postponeUpdate">稍后再说</button>
-          <button class="update-dialog-confirm" @click="downloadAndInstallUpdate">立即下载并安装</button>
+      <p v-if="settingsStatus" class="update-status" role="alert">{{ settingsStatus }}</p>
+      <details class="about-card">
+        <summary>关于 JustToDo</summary>
+        <p>一款轻量的 Windows 桌面待办应用，采用 MIT License 开源。</p>
+        <div class="about-version">版本 v{{ currentVersion }} · Windows</div>
+        <div class="about-actions">
+          <button type="button" class="update-btn" @click="openExternal(repositoryUrl)">GitHub 项目</button>
+          <button type="button" class="update-btn" @click="openExternal(repositoryUrl + '/releases')">下载与版本说明</button>
+          <button type="button" class="update-btn" @click="openExternal(repositoryUrl + '/blob/main/LICENSE')">MIT License</button>
         </div>
-      </section>
-    </div>
+        <p class="about-update-note">更新时请从 Releases 下载并安装最新版本。</p>
+        <p v-if="aboutStatus" class="update-status" role="alert">{{ aboutStatus }}</p>
+      </details>
+    </section>
   </main>
 </template>
 
@@ -490,20 +405,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onShortcutKeydown, t
 .category-edit input[type="text"],.category-edit input:not([type]) { flex:1; min-width:0; padding:5px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:10px; }
 .category-edit input[type="color"] { width:26px; height:25px; padding:1px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); }
 .category-edit button:disabled { opacity:.45; }
-.version-label { margin-top:14px; color:var(--text-soft); font-size:10px; }
 .update-btn { width:100%; margin-top:8px; padding:6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-soft); color:var(--text); font-size:11px; }
-.update-release { margin-top:6px; font-size:11px; }
-.update-notes { margin-top:3px; white-space:pre-wrap; max-height:80px; overflow:auto; color:var(--text-soft); font-size:10px; }
-.update-progress { height:3px; margin-top:6px; background:var(--border); }
-.update-progress span { display:block; height:100%; background:var(--accent); }
 .update-status { display:block; margin-top:6px; color:var(--text-soft); font-size:10px; }
-.update-dialog-backdrop { position:absolute; z-index:30; inset:0; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(0,0,0,.28); }
-.update-dialog { width:min(292px, 100%); max-height:100%; overflow:auto; box-sizing:border-box; padding:14px; border:1px solid var(--border); border-radius:6px; background:var(--bg); box-shadow:0 10px 28px rgba(0,0,0,.24); }
-.update-dialog strong { display:block; font-size:13px; }
-.update-dialog p { margin:8px 0; color:var(--text-soft); font-size:11px; line-height:1.5; }
-.update-confirm-notes { max-height:92px; overflow:auto; padding:7px; border-radius:4px; background:var(--bg-soft); color:var(--text-soft); font-size:10px; line-height:1.45; white-space:pre-wrap; }
-.update-dialog-actions { display:flex; gap:8px; margin-top:12px; }
-.update-dialog-actions button { flex:1; padding:6px 8px; border:1px solid var(--border); border-radius:4px; font-size:11px; }
-.update-dialog-cancel { background:var(--bg-soft); color:var(--text); }
-.update-dialog-confirm { border-color:var(--accent) !important; background:var(--accent); color:#fff; }
+.about-card { margin-top:14px; padding:8px; border:1px solid var(--border); border-radius:4px; }
+.about-card summary { cursor:pointer; color:var(--text); font-weight:600; }
+.about-card > p { margin:8px 0; color:var(--text-soft); line-height:1.5; }
+.about-version { margin:6px 0; color:var(--text-soft); }
+.about-actions { display:grid; gap:4px; }
+.about-actions .update-btn { margin-top:2px; }
+.about-card .about-update-note { font-size:10px; }
 </style>
